@@ -52,7 +52,12 @@ vi.mock("../stream-state.ts", () => ({
   fixStaleStreamStates: async () => {},
 }));
 
-import { handleCommand } from "../orchestrator.ts";
+import {
+  cwdDisplayName,
+  formatGroupCreateTime,
+  handleCommand,
+  newGroupChatName,
+} from "../orchestrator.ts";
 import {
   _clearAdapterCacheForTest,
   _resetSessionRegistryFileForTest,
@@ -73,6 +78,7 @@ function mockPlatform(kind: "wechat" | "feishu" = "wechat"): PlatformAdapter {
     sendCard: vi.fn(async () => true),
     sendRawCard: vi.fn(async () => true),
     createGroup: vi.fn(async () => "feishu-group"),
+    bindGroupTag: vi.fn(async () => {}),
     updateChatInfo: vi.fn(async () => {}),
     getChatInfo: vi.fn(async () => ({ name: kind === "wechat" ? "微信会话" : "飞书会话", description: "" })),
     disbandChat: vi.fn(async () => {}),
@@ -177,7 +183,7 @@ describe("handleCommand WeChat processing ack", () => {
         blocks: [{ type: "text" as const, text: `收到: ${userText}` }],
       };
     });
-    _setAdapterForToolForTest("claude", {
+    const feishuAutoAdapter: ToolAdapter = {
       displayName: "Claude",
       sessionDescPrefix: "Claude Session:",
       createSession: vi.fn(async () => ({ sessionId: "sid-feishu-new" })),
@@ -187,7 +193,10 @@ describe("handleCommand WeChat processing ack", () => {
         cwd: "F:\\repo",
       }),
       closeSession: async () => {},
-    });
+    };
+    _setAdapterForToolForTest("claude", feishuAutoAdapter);
+    _setAdapterForToolForTest("cursor", feishuAutoAdapter);
+    _setAdapterForToolForTest("codex", feishuAutoAdapter);
     await recordSessionRegistry({
       chatId: "feishu-p2p",
       sessionId: "stale-sid",
@@ -198,10 +207,18 @@ describe("handleCommand WeChat processing ack", () => {
 
     await handleCommand(platform, "帮我看一下日志", "feishu-p2p", "ou-user", Date.now(), "p2p");
 
-    expect(platform.createGroup).toHaveBeenCalledWith(expect.stringContaining("帮我看一下日志"), ["ou-user"]);
+    const groupNamePattern = /^.+\-\d{6}-\d{4}$/;
+    expect(platform.createGroup).toHaveBeenCalledWith(
+      expect.stringMatching(groupNamePattern),
+      ["ou-user"],
+    );
+    expect(platform.bindGroupTag).toHaveBeenCalledWith(
+      "feishu-group",
+      expect.any(String),
+    );
     expect(platform.updateChatInfo).toHaveBeenCalledWith(
       "feishu-group",
-      expect.stringContaining("帮我看一下日志"),
+      expect.stringMatching(groupNamePattern),
       expect.stringContaining("sid-feishu-new"),
     );
     expect(prompt).toHaveBeenCalledWith(
@@ -233,5 +250,19 @@ describe("handleCommand WeChat processing ack", () => {
     expect(platform.sendRawCard).toHaveBeenCalled();
     const registry = await loadSessionRegistryForBinding();
     expect(registry["feishu-p2p"]).toBeUndefined();
+  });
+});
+
+describe("group chat naming", () => {
+  it("formatGroupCreateTime uses YYMMDD-HHMM", () => {
+    const date = new Date(2026, 0, 1, 2, 3);
+    expect(formatGroupCreateTime(date)).toBe("260101-0203");
+  });
+
+  it("newGroupChatName combines project folder and create time", () => {
+    const cwd = "D:\\projects\\ChatCCC";
+    const date = new Date(2026, 0, 1, 2, 3);
+    expect(cwdDisplayName(cwd)).toBe("ChatCCC");
+    expect(newGroupChatName(cwd, date)).toBe("ChatCCC-260101-0203");
   });
 });

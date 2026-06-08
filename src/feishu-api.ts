@@ -1,7 +1,6 @@
 import { readdir, stat, readFile, mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { extname, resolve as resolvePath } from "node:path";
-import { dirname, join } from "node:path";
+import { basename, dirname, extname, join, resolve as resolvePath } from "node:path";
 import sharp from "sharp";
 
 import {
@@ -269,6 +268,202 @@ export async function disbandChat(
   });
   const data = (await resp.json()) as { code: number; msg?: string };
   if (data.code !== 0) throw new Error(`[${data.code}] ${data.msg}`);
+}
+
+// ---------------------------------------------------------------------------
+// 群标签（企业自定义群标签）
+// ---------------------------------------------------------------------------
+
+const FEISHU_TAG_CACHE_FILE = join(USER_DATA_DIR, "state", "feishu-tag-cache.json");
+
+/** 新建群时绑定的飞书群标签名（固定，不区分项目） */
+export const FEISHU_GROUP_TAG_NAME = "chatccc";
+
+/**
+ * 飞书标签 name / i18n name 长度上限（官方文档为 40；超长返回 407）。
+ * 同时按 UTF-8 字节数截断。
+ */
+export const FEISHU_TAG_NAME_MAX_LEN = 40;
+
+function tagNameMetrics(name: string): { charLen: number; byteLen: number } {
+  return {
+    charLen: [...name].length,
+    byteLen: new TextEncoder().encode(name).length,
+  };
+}
+
+function logFeishuTagDebug(
+  action: string,
+  details: Record<string, unknown>,
+): void {
+  console.log(`[${ts()}] [TAG-API] ${action} ${JSON.stringify(details)}`);
+}
+
+/** 从工作目录解析项目文件夹名（始终取 basename，避免整段路径进标签） */
+export function projectNameFromCwd(cwd: string): string {
+  const trimmed = cwd.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return "cwd";
+  let name = basename(trimmed);
+  if (!name || name === "." || name === "..") name = "cwd";
+  // 标签名中不应出现路径分隔符等字符
+  name = name.replace(/[\\/:*?"<>|]/g, "_").trim();
+  return name || "cwd";
+}
+
+/** 将标签名限制在飞书允许的长度内 */
+export function fitFeishuTagName(name: string): string {
+  let result = [...name].slice(0, FEISHU_TAG_NAME_MAX_LEN).join("");
+  const enc = new TextEncoder();
+  while (result.length > 0 && enc.encode(result).length > FEISHU_TAG_NAME_MAX_LEN) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+
+/** 新建群时绑定的飞书标签名（固定为 chatccc） */
+export function buildGroupChatTagName(_cwd?: string): string {
+  return FEISHU_GROUP_TAG_NAME;
+}
+
+async function loadFeishuTagCache(): Promise<Record<string, string>> {
+  try {
+    const raw = await readFile(FEISHU_TAG_CACHE_FILE, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function saveFeishuTagCache(cache: Record<string, string>): Promise<void> {
+  await mkdir(dirname(FEISHU_TAG_CACHE_FILE), { recursive: true });
+  await writeFile(FEISHU_TAG_CACHE_FILE, JSON.stringify(cache, null, 2), "utf-8");
+}
+
+/** 创建租户标签；名称已存在时复用 duplicate_id。 */
+export async function createOrGetTenantTag(token: string, name: string): Promise<string> {
+  const safeName = fitFeishuTagName(name);
+  const cache = await loadFeishuTagCache();
+  const cached = cache[safeName];
+  if (cached) {
+    logFeishuTagDebug("create_tag_cache_hit", {
+      tagName: safeName,
+      tagId: cached,
+      metrics: tagNameMetrics(safeName),
+    });
+    return cached;
+  }
+
+  const url = `${BASE_URL}/im/v2/tags`;
+  const requestBody = {
+    create_tag: {
+      tag_type: "tenant",
+      name: safeName,
+      i18n_names: [{ locale: "zh_cn", name: safeName }],
+    },
+  };
+  logFeishuTagDebug("create_tag_request", {
+    method: "POST",
+    url,
+    tagName: safeName,
+    metrics: tagNameMetrics(safeName),
+    requestBody,
+  });
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(requestBody),
+  });
+  const data = (await resp.json()) as {
+    code: number;
+    msg?: string;
+    data?: {
+      id?: string;
+      create_tag_fail_reason?: { duplicate_id?: string };
+    };
+  };
+  logFeishuTagDebug("create_tag_response", {
+    method: "POST",
+    url,
+    tagName: safeName,
+    httpStatus: resp.status,
+    code: data.code,
+    msg: data.msg,
+    data: data.data,
+  });
+  if (data.code !== 0) {
+    throw new Error(
+      `[${data.code}] ${data.msg} (tagName="${safeName}", charLen=${tagNameMetrics(safeName).charLen}, byteLen=${tagNameMetrics(safeName).byteLen})`,
+    );
+  }
+  const tagId = data.data?.id ?? data.data?.create_tag_fail_reason?.duplicate_id;
+  if (!tagId) throw new Error("create tag: no tag id returned");
+  cache[safeName] = tagId;
+  await saveFeishuTagCache(cache);
+  return tagId;
+}
+
+export async function bindTagsToChat(
+  token: string,
+  chatId: string,
+  tagIds: string[],
+): Promise<void> {
+  const url = `${BASE_URL}/im/v2/biz_entity_tag_relation`;
+  const requestBody = {
+    tag_biz_type: "chat",
+    biz_entity_id: chatId,
+    tag_ids: tagIds,
+  };
+  logFeishuTagDebug("bind_tag_request", {
+    method: "POST",
+    url,
+    chatId,
+    requestBody,
+  });
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(requestBody),
+  });
+  const data = (await resp.json()) as { code: number; msg?: string };
+  logFeishuTagDebug("bind_tag_response", {
+    method: "POST",
+    url,
+    chatId,
+    httpStatus: resp.status,
+    code: data.code,
+    msg: data.msg,
+  });
+  if (data.code !== 0) throw new Error(`[${data.code}] ${data.msg}`);
+}
+
+/** 为新建群绑定 chatccc 标签；需 im:tag:write 与 im:biz_entity_tag_relation:write。 */
+export async function applyGroupChatTag(
+  token: string,
+  chatId: string,
+  cwd: string,
+): Promise<void> {
+  const project = projectNameFromCwd(cwd);
+  const tagName = buildGroupChatTagName(cwd);
+  logFeishuTagDebug("apply_group_tag_start", {
+    chatId,
+    cwd,
+    project,
+    tagName,
+    metrics: tagNameMetrics(tagName),
+  });
+  const tagId = await createOrGetTenantTag(token, tagName);
+  await bindTagsToChat(token, chatId, [tagId]);
+  logFeishuTagDebug("apply_group_tag_done", { chatId, tagName, tagId });
+  console.log(`[${ts()}] [TAG] Bound "${tagName}" to chat ${chatId}`);
 }
 
 export function extractSessionInfo(description: string): { sessionId: string; tool: string } | null {

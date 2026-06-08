@@ -67,6 +67,7 @@ import {
   sendRawCard,
   sendTextReply,
   setChatAvatar,
+  applyGroupChatTag,
   updateCardMessage,
   updateChatInfo,
   disbandChat,
@@ -139,6 +140,9 @@ function createFeishuAdapter(): PlatformAdapter {
     },
     async setChatAvatar(chatId, tool, status) {
       return setChatAvatar(await auth(), chatId, tool, status);
+    },
+    async bindGroupTag(chatId, cwd) {
+      await applyGroupChatTag(await auth(), chatId, cwd);
     },
 
     extractSessionInfo(description) {

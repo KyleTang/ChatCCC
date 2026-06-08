@@ -147,3 +147,11 @@ export function sendRestartCard(...args: Parameters<typeof realApi.sendRestartCa
 export function getMergeForwardMessages(...args: Parameters<typeof realApi.getMergeForwardMessages>): ReturnType<typeof realApi.getMergeForwardMessages> {
   return _impl.getMergeForwardMessages(...args);
 }
+
+export function buildGroupChatTagName(...args: Parameters<typeof realApi.buildGroupChatTagName>): ReturnType<typeof realApi.buildGroupChatTagName> {
+  return realApi.buildGroupChatTagName(...args);
+}
+
+export function applyGroupChatTag(...args: Parameters<typeof realApi.applyGroupChatTag>): ReturnType<typeof realApi.applyGroupChatTag> {
+  return realApi.applyGroupChatTag(...args);
+}

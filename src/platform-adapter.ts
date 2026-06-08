@@ -42,6 +42,9 @@ export interface PlatformAdapter {
   /** 设置群头像 */
   setChatAvatar(chatId: string, tool: string, status: string): Promise<void>;
 
+  /** 新建群后绑定平台群标签（如飞书 chatccc）；不支持的平台可省略 */
+  bindGroupTag?(chatId: string, cwd: string): Promise<void>;
+
   /** 从群描述中提取 session 信息 */
   extractSessionInfo(
     description: string,

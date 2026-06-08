@@ -91,6 +91,21 @@ export function cwdDisplayName(cwd: string): string {
   return trimmed.split(/[\\/]/).filter(Boolean).pop() || trimmed || "cwd";
 }
 
+/** 群创建时间戳，格式 YYMMDD-HHMM，如 2026-01-01 02:03 → 260101-0203 */
+export function formatGroupCreateTime(date: Date): string {
+  const y = String(date.getFullYear()).slice(-2);
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${y}${m}${d}-${h}${min}`;
+}
+
+/** 新建群聊时的默认群名：{项目名}-{YYMMDD-HHMM} */
+export function newGroupChatName(cwd: string, createdAt?: Date): string {
+  return `${cwdDisplayName(cwd)}-${formatGroupCreateTime(createdAt ?? new Date())}`;
+}
+
 export function sessionChatName(left: string, cwd: string): string {
   return `${left}-${cwdDisplayName(cwd)}`;
 }
@@ -112,6 +127,23 @@ function findModelMatch(input: string, models: string[]): string | null {
 
 function isUntitledSessionChatName(name: string): boolean {
   return name === "新会话" || name.startsWith("新会话-");
+}
+
+async function tryBindGroupChatTag(
+  platform: PlatformAdapter,
+  chatId: string,
+  cwd: string,
+  stepLabel: string,
+): Promise<void> {
+  if (!platform.bindGroupTag) return;
+  try {
+    await platform.bindGroupTag(chatId, cwd);
+    console.log(`[${ts()}] [${stepLabel}] Feishu group tag bound`);
+  } catch (err) {
+    console.warn(
+      `[${ts()}] [${stepLabel}] Feishu group tag skipped (chatId=${chatId}, cwd="${cwd}"): ${(err as Error).message}`,
+    );
+  }
 }
 
 function shouldSendWechatProcessingAck(
@@ -486,7 +518,7 @@ export async function handleCommand(
     }
 
     const cwd = sessionCwd;
-    const initialName = sessionChatName("新会话", cwd);
+    const initialName = newGroupChatName(cwd);
 
     // 微信私聊：不创建群，直接绑定 session 到当前私聊
     // 飞书私聊：也要建群
@@ -552,6 +584,7 @@ export async function handleCommand(
       console.log(
         `[${ts()}] [STEP 2/4] Created Feishu group: ${newChatId}  → OK`,
       );
+      await tryBindGroupChatTag(platform, newChatId, cwd, "STEP 2/4");
     } catch (err) {
       console.error(`[${ts()}] [STEP 2/4] FAIL: ${(err as Error).message}`);
       logTrace(tid, "DONE", {
@@ -936,7 +969,7 @@ export async function handleCommand(
 
       // 第二步:事务式切换 chat 绑定
       const descPrefix = sessionPrefixForTool(descriptionTool);
-      const newName = sessionChatName("新会话", cwd);
+      const newName = newGroupChatName(cwd);
       const switchResult = await switchChatBinding({
         chatId,
         chatType,
@@ -1093,7 +1126,7 @@ export async function handleCommand(
       }
 
       const descPrefix2 = sessionPrefixForTool(target.tool);
-      const newName2 = target.chatName || sessionChatName("新会话", cwd2);
+      const newName2 = target.chatName || newGroupChatName(cwd2);
       const switchResult = await switchChatBinding({
         chatId,
         chatType,
@@ -1452,13 +1485,14 @@ export async function handleCommand(
     }
 
     const cwd = sessionCwd;
-    const initialName = sessionChatName(text.slice(0, 10) || "新会话", cwd);
+    const initialName = newGroupChatName(cwd);
     let newChatId: string;
     try {
       newChatId = await platform.createGroup(initialName, [openId]);
       console.log(
         `[${ts()}] [AUTO-P2P 2/5] Created Feishu group: ${newChatId} → OK`,
       );
+      await tryBindGroupChatTag(platform, newChatId, cwd, "AUTO-P2P 2/5");
     } catch (err) {
       console.error(`[${ts()}] [AUTO-P2P 2/5] FAIL: ${(err as Error).message}`);
       logTrace(tid, "DONE", {
