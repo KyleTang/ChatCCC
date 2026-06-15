@@ -32,5 +32,13 @@
     "path": "",
     "model": "",
     "effort": ""
+  },
+  "mimo": {
+    "enabled": false,
+    "defaultAgent": false,
+    "path": "",
+    "model": "",
+    "apiKey": "",
+    "baseUrl": ""
   }
 }

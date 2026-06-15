@@ -21,7 +21,7 @@ ChatCCC 把本地 AI 编程工具接入即时通讯软件。你可以在手机�
 - **手机上也能用 AI 编程工具**：在飞书或微信发消息，就像在终端给 Agent 下指令。
 - **飞书体验更完整**：一群一会话、CardKit 卡片流式更新、支持群管理和多会话并行。
 - **微信接入更轻**：不用创建飞书应用，启动后扫码即可在微信私聊里使用。
-- **多 Agent 切换**：`/new` 使用默认 Agent，也可以用 `/new claude`、`/new cursor`、`/new codex` 指定工具。
+- **多 Agent 切换**：`/new` 使用默认 Agent，也可以用 `/new claude`、`/new cursor`、`/new codex`、`/new mimo` 指定工具。
 - **群里能跑 git**：`/git status`、`/git pull`、`/git log` 会在当前会话工作目录执行，并把输出发回聊天窗口。
 
 ## 飞书和微信的差异
@@ -232,6 +232,16 @@ codex --version
 
 Codex 的默认模型和推理强度可继续由 `~/.codex/config.toml` 管理，也可以在 `config.json` 中覆盖。
 
+#### MiMo Code CLI
+
+```bash
+npm install -g @anthropic-ai/mimo-code
+mimo login
+mimo --version
+```
+
+MiMo Code 的模型和 API 配置可在 `config.json` 的 `mimo` 字段中设置，也可以通过环境变量 `MIMO_API_KEY` 和 `MIMO_BASE_URL` 配置。
+
 ### 4. `config.json`
 
 `config.json` 不存在时，ChatCCC 会从 `config.sample.json` 复制一份。常用结构如下：
@@ -269,6 +279,14 @@ Codex 的默认模型和推理强度可继续由 `~/.codex/config.toml` 管理�
     "path": "",
     "model": "",
     "effort": ""
+  },
+  "mimo": {
+    "enabled": false,
+    "defaultAgent": false,
+    "path": "",
+    "model": "",
+    "apiKey": "",
+    "baseUrl": ""
   }
 }
 ```
@@ -287,11 +305,11 @@ Codex 的默认模型和推理强度可继续由 `~/.codex/config.toml` 管理�
 | `claude.apiKey` / `claude.baseUrl` | 选填；设置后传给 Claude Agent SDK，留空以 `~/.claude/settings.json` 为准 |
 | `claude.maxTurn` | 选填；Claude 最大对话轮数，默认 0（无限制），可在 Web UI 编辑 |
 
-> **权限控制**：普通消息以 `bypassPermissions` 模式运行，跳过 Agent 操作确认。使用 `/plan` 或 `/ask` 前缀时，ChatCCC 自动切换为只读模式：Claude SDK 仅放行 Read + stop-stuck-loop 网络请求，Codex 使用 `--sandbox read-only`，Cursor 使用 `--mode plan/ask`。请只在可信环境中使用。
+> **权限控制**：普通消息以 `bypassPermissions` 模式运行，跳过 Agent 操作确认。使用 `/plan` 或 `/ask` 前缀时，ChatCCC 自动切换为只读模式：Claude SDK 仅放行 Read + stop-stuck-loop 网络请求，Codex 和 MiMo Code 使用 `--sandbox read-only`，Cursor 使用 `--mode plan/ask`。请只在可信环境中使用。
 
 ### 5. 开始使用
 
-**飞书：** 找到你的机器人，发送 `/new`、`/new claude`、`/new cursor` 或 `/new codex`。机器人会创建一个新群并绑定 AI 会话，之后直接在群里聊天即可。
+**飞书：** 找到你的机器人，发送 `/new`、`/new claude`、`/new cursor`、`/new codex` 或 `/new mimo`。机器人会创建一个新群并绑定 AI 会话，之后直接在群里聊天即可。
 
 **微信：** 扫码登录后，在机器人私聊里发送 `/new` 或指定 Agent 的 `/new ...` 命令即可开始。功能与飞书基本一致，但展示为纯文本。
 
@@ -303,6 +321,7 @@ Codex 的默认模型和推理强度可继续由 `~/.codex/config.toml` 管理�
 | `/new claude` | 创建 Claude Code 会话 |
 | `/new cursor` | 创建 Cursor 会话 |
 | `/new codex` | 创建 Codex 会话 |
+| `/new mimo` | 创建 MiMo Code 会话 |
 | `/newh` | 重置当前会话，保留工作目录 |
 | `/model` | 查看或切换当前会话的模型 |
 | `/stop` | 停止当前回复 |
@@ -315,7 +334,7 @@ Codex 的默认模型和推理强度可继续由 `~/.codex/config.toml` 管理�
 | `/restart` | 重启机器人进程 |
 | `/updateg` | 更新 npm 全局包并重启（仅限 `npm install -g chatccc` 安装的全局进程） |
 
-> **模型切换**：`/model` 查看可选模型清单，`/model <名称>` 模糊匹配切换，`/model clear` 恢复默认。当前仅 Claude Code 支持模型切换（需同时填写 `claude.model` 和 `claude.subagentModel`），Cursor / Codex 切换正在开发中。
+> **模型切换**：`/model` 查看可选模型清单，`/model <名称>` 模糊匹配切换，`/model clear` 恢复默认。当前仅 Claude Code 支持模型切换（需同时填写 `claude.model` 和 `claude.subagentModel`），Cursor / Codex / MiMo Code 切换正在开发中。
 
 ---
 

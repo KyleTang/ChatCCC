@@ -94,6 +94,20 @@ export interface CodexConfig {
   effort: string;
 }
 
+export interface MimoConfig {
+  /** 是否启用 MiMo Code Agent；缺省时按"有任意字段非空"自动判定（向后兼容） */
+  enabled: boolean;
+  /** 是否作为 /new 未指定工具时使用的默认 Agent */
+  defaultAgent: boolean;
+  /** MiMo Code CLI 可执行文件绝对路径；留空时退回到 PATH 中的 `mimo` */
+  path: string;
+  model: string;
+  /** MiMo API Key（选填） */
+  apiKey: string;
+  /** MiMo API Base URL（选填） */
+  baseUrl: string;
+}
+
 export interface FeishuConfig {
   appId: string;
   appSecret: string;
@@ -121,10 +135,11 @@ export interface AppConfig {
   claude: ClaudeConfig;
   cursor: CursorConfig;
   codex: CodexConfig;
+  mimo: MimoConfig;
 }
 
-export type AgentTool = "claude" | "cursor" | "codex";
-export const AGENT_TOOLS: AgentTool[] = ["claude", "cursor", "codex"];
+export type AgentTool = "claude" | "cursor" | "codex" | "mimo";
+export const AGENT_TOOLS: AgentTool[] = ["claude", "cursor", "codex", "mimo"];
 
 /** 获取指定 agent 配置中所有模型相关的值（最多 100 个，去重） */
 export function getAllModelsForTool(tool: AgentTool, cfg: AppConfig = config): string[] {
@@ -140,6 +155,8 @@ export function getAllModelsForTool(tool: AgentTool, cfg: AppConfig = config): s
     collect(cfg.cursor.model);
   } else if (tool === "codex") {
     collect(cfg.codex.model);
+  } else if (tool === "mimo") {
+    collect(cfg.mimo.model);
   }
 
   return Array.from(seen).slice(0, 100);
@@ -336,6 +353,7 @@ function loadConfig(): AppConfig {
     claude: { enabled: false, defaultAgent: true, model: "", subagentModel: "", effort: "", apiKey: "", baseUrl: "", maxTurn: 0 },
     cursor: { enabled: false, defaultAgent: false, path: "", model: "claude-opus-4-7-max" },
     codex: { enabled: false, defaultAgent: false, path: "", model: "", effort: "" },
+    mimo: { enabled: false, defaultAgent: false, path: "", model: "", apiKey: "", baseUrl: "" },
   };
 
   if (!IS_TEST_ENV) {
@@ -379,6 +397,7 @@ function loadConfig(): AppConfig {
     claude?: Partial<ClaudeConfig> & { enabled?: unknown };
     cursor?: { enabled?: unknown; defaultAgent?: unknown; path?: unknown; command?: unknown; model?: unknown };
     codex?: { enabled?: unknown; defaultAgent?: unknown; path?: unknown; command?: unknown; model?: unknown; effort?: unknown };
+    mimo?: { enabled?: unknown; defaultAgent?: unknown; path?: unknown; command?: unknown; model?: unknown; apiKey?: unknown; baseUrl?: unknown };
   };
   try {
     parsed = JSON.parse(raw);
@@ -391,6 +410,7 @@ function loadConfig(): AppConfig {
   const claude = parsed.claude ?? {} as Partial<ClaudeConfig>;
   const cursorRaw = (parsed.cursor ?? {}) as NonNullable<typeof parsed.cursor>;
   const codexRaw = (parsed.codex ?? {}) as NonNullable<typeof parsed.codex>;
+  const mimoRaw = (parsed.mimo ?? {}) as NonNullable<typeof parsed.mimo>;
 
   // 兼容旧字段 `command`：命中时打印一次性 warning 提示用户改名
   const onLegacyField = (label: string, value: string): void => {
@@ -430,19 +450,30 @@ function loadConfig(): AppConfig {
       (typeof codexRaw.model === "string" && (codexRaw.model as string).trim()) ||
       (typeof codexRaw.effort === "string" && (codexRaw.effort as string).trim()),
     );
+  const mimoNonEmpty = (): boolean =>
+    Boolean(
+      (typeof mimoRaw.path === "string" && mimoRaw.path.trim()) ||
+      (typeof mimoRaw.command === "string" && (mimoRaw.command as string).trim()) ||
+      (typeof mimoRaw.model === "string" && (mimoRaw.model as string).trim()) ||
+      (typeof mimoRaw.apiKey === "string" && (mimoRaw.apiKey as string).trim()) ||
+      (typeof mimoRaw.baseUrl === "string" && (mimoRaw.baseUrl as string).trim()),
+    );
 
   const claudeEnabled = resolveEnabled(claude.enabled, claudeNonEmpty);
   const cursorEnabled = resolveEnabled(cursorRaw.enabled, cursorNonEmpty);
   const codexEnabled = resolveEnabled(codexRaw.enabled, codexNonEmpty);
+  const mimoEnabled = resolveEnabled(mimoRaw.enabled, mimoNonEmpty);
   const explicitDefaultTool: AgentTool | null =
     typeof claude.defaultAgent === "boolean" && claude.defaultAgent && claudeEnabled ? "claude" :
     typeof cursorRaw.defaultAgent === "boolean" && cursorRaw.defaultAgent && cursorEnabled ? "cursor" :
     typeof codexRaw.defaultAgent === "boolean" && codexRaw.defaultAgent && codexEnabled ? "codex" :
+    typeof mimoRaw.defaultAgent === "boolean" && mimoRaw.defaultAgent && mimoEnabled ? "mimo" :
     null;
   const fallbackDefaultTool: AgentTool =
     claudeEnabled ? "claude" :
     cursorEnabled ? "cursor" :
     codexEnabled ? "codex" :
+    mimoEnabled ? "mimo" :
     "claude";
   const defaultTool = explicitDefaultTool ?? fallbackDefaultTool;
 
@@ -498,6 +529,14 @@ function loadConfig(): AppConfig {
       path: readToolCliPath(codexRaw, { label: "codex", onLegacyField }),
       model: normalizeOptionalConfigField(codexRaw.model, { label: "codex.model" }),
       effort: normalizeOptionalConfigField(codexRaw.effort, { label: "codex.effort" }),
+    },
+    mimo: {
+      enabled: mimoEnabled,
+      defaultAgent: defaultTool === "mimo",
+      path: readToolCliPath(mimoRaw, { label: "mimo", onLegacyField }),
+      model: normalizeOptionalConfigField(mimoRaw.model, { label: "mimo.model" }),
+      apiKey: normalizeOptionalConfigField(mimoRaw.apiKey, { label: "mimo.apiKey" }),
+      baseUrl: normalizeOptionalConfigField(mimoRaw.baseUrl, { label: "mimo.baseUrl" }),
     },
   };
 }
@@ -592,6 +631,21 @@ function resolveCursorAgentArgs(): string[] {
 export let CURSOR_AGENT_ARGS = resolveCursorAgentArgs();
 
 // ---------------------------------------------------------------------------
+// MiMo Code 配置导出
+// ---------------------------------------------------------------------------
+
+function detectMimoAgent(): string {
+  if (config.mimo.path) return config.mimo.path;
+  return "mimo";
+}
+
+/** MiMo Code CLI 可执行文件路径 */
+export let MIMO_AGENT_COMMAND = detectMimoAgent();
+
+export let MIMO_API_KEY = config.mimo.apiKey;
+export let MIMO_BASE_URL = config.mimo.baseUrl;
+
+// ---------------------------------------------------------------------------
 // reloadConfigFromDisk — setup → service「在线切换」时刷新进程内 config
 // ---------------------------------------------------------------------------
 //
@@ -635,6 +689,9 @@ export function applyLoadedConfig(next: AppConfig): void {
   ALLOW_INTERRUPT = next.allowInterrupt;
   CURSOR_AGENT_COMMAND = detectCursorAgent();
   CURSOR_AGENT_ARGS = resolveCursorAgentArgs();
+  MIMO_AGENT_COMMAND = detectMimoAgent();
+  MIMO_API_KEY = next.mimo.apiKey;
+  MIMO_BASE_URL = next.mimo.baseUrl;
 }
 
 export function reloadConfigFromDisk(): void {
@@ -830,6 +887,7 @@ export function sessionPrefixForTool(tool: string): string {
 export function toolDisplayName(tool: string): string {
   if (tool === "cursor") return "Cursor";
   if (tool === "codex") return "Codex";
+  if (tool === "mimo") return "MiMo Code";
   return "Claude Code";
 }
 

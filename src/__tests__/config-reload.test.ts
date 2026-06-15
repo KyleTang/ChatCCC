@@ -55,6 +55,7 @@ const baseAppConfig: AppConfig = {
   },
   cursor: { enabled: true, defaultAgent: false, path: "/initial/cursor", model: "initial-cursor-model" },
   codex: { enabled: true, defaultAgent: false, path: "/initial/codex", model: "initial-codex-model", effort: "initial-codex-effort" },
+  mimo: { enabled: false, defaultAgent: false, path: "", model: "", apiKey: "", baseUrl: "" },
 };
 
 // 把 module 状态抢救快照：每个 it 跑前重置回这个状态，避免污染相邻测试。

@@ -35,6 +35,7 @@ interface AppConfig {
   // `command` 是已废弃的旧字段名，保留只读以兼容升级前的 config.json
   cursor?: { enabled?: boolean; defaultAgent?: boolean; path?: string; command?: string; model?: string };
   codex?: { enabled?: boolean; defaultAgent?: boolean; path?: string; command?: string; model?: string; effort?: string };
+  mimo?: { enabled?: boolean; defaultAgent?: boolean; path?: string; command?: string; model?: string; apiKey?: string; baseUrl?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +203,8 @@ function validateCli(tool: string): { ok: boolean; path?: string; error?: string
   let cmd: string;
   if (tool === "cursor") {
     cmd = readToolPath(cfg.cursor) || detectCursorAgentPath();
+  } else if (tool === "mimo") {
+    cmd = readToolPath(cfg.mimo) || "mimo";
   } else {
     cmd = readToolPath(cfg.codex) || "codex";
   }
@@ -383,6 +386,24 @@ export function unflattenConfig(flat: Record<string, unknown>): Record<string, u
     } else if (key === "CHATCCC_CODEX_DEFAULT_AGENT") {
       result.codex = result.codex || {};
       (result.codex as Record<string, unknown>).defaultAgent = val === true || val === "true";
+    } else if (key === "CHATCCC_MIMO_PATH") {
+      result.mimo = result.mimo || {};
+      (result.mimo as Record<string, unknown>).path = val;
+    } else if (key === "CHATCCC_MIMO_MODEL") {
+      result.mimo = result.mimo || {};
+      (result.mimo as Record<string, unknown>).model = val;
+    } else if (key === "CHATCCC_MIMO_API_KEY") {
+      result.mimo = result.mimo || {};
+      (result.mimo as Record<string, unknown>).apiKey = val;
+    } else if (key === "CHATCCC_MIMO_BASE_URL") {
+      result.mimo = result.mimo || {};
+      (result.mimo as Record<string, unknown>).baseUrl = val;
+    } else if (key === "CHATCCC_MIMO_ENABLED") {
+      result.mimo = result.mimo || {};
+      (result.mimo as Record<string, unknown>).enabled = val === true || val === "true";
+    } else if (key === "CHATCCC_MIMO_DEFAULT_AGENT") {
+      result.mimo = result.mimo || {};
+      (result.mimo as Record<string, unknown>).defaultAgent = val === true || val === "true";
     }
   }
   return result;
@@ -733,6 +754,41 @@ header .badge{font-size:13px;padding:4px 12px;border-radius:12px;font-weight:500
           </fieldset>
         </div>
 
+        <!-- MiMo Code 卡片 -->
+        <div class="agent-card" id="agent-card-mimo">
+          <div class="agent-card-header">
+            <input type="checkbox" class="agent-toggle" id="agent-enable-mimo" onchange="onAgentToggle('mimo', this.checked)">
+            <div class="meta">
+              <div class="name">MiMo Code</div>
+              <div class="desc">Xiaomi MiMo Code CLI<br>需安装并登录</div>
+            </div>
+          </div>
+          <label class="agent-default-row">
+            <input type="checkbox" id="agent-default-mimo" onchange="onDefaultAgentToggle('mimo', this.checked)">
+            设为默认 Agent
+          </label>
+          <fieldset class="agent-body" id="agent-body-mimo" disabled>
+            <div class="form-group">
+              <label>CLI 路径</label>
+              <input type="text" id="field-CHATCCC_MIMO_PATH" placeholder="mimo">
+            </div>
+            <div class="form-group">
+              <label>模型</label>
+              <input type="text" id="field-CHATCCC_MIMO_MODEL" placeholder="留空使用默认模型">
+            </div>
+            <div class="form-group">
+              <label>API Key</label>
+              <input type="password" id="field-CHATCCC_MIMO_API_KEY" placeholder="选填">
+            </div>
+            <div class="form-group">
+              <label>Base URL</label>
+              <input type="text" id="field-CHATCCC_MIMO_BASE_URL" placeholder="选填">
+            </div>
+            <button class="btn btn-outline" onclick="validateCli('mimo')" style="margin-bottom:12px">检测 MiMo CLI</button>
+            <div id="mimo-validate-result"></div>
+          </fieldset>
+        </div>
+
       </div>
 
       <div class="btn-group" style="justify-content:space-between">
@@ -835,6 +891,18 @@ header .badge{font-size:13px;padding:4px 12px;border-radius:12px;font-weight:500
       </div>
     </details>
 
+    <details class="card config-section" id="dash-mimo">
+      <summary>MiMo Code Agent</summary>
+      <div class="section-detail">
+        <div class="config-row"><span class="key">CLI 路径</span><span class="val" id="cfg-MIMO_PATH">-</span></div>
+        <div class="config-row"><span class="key">模型</span><span class="val" id="cfg-MIMO_MODEL">-</span></div>
+        <div class="config-row"><span class="key">API Key</span><span class="val" id="cfg-MIMO_API_KEY">-</span></div>
+        <div class="config-row"><span class="key">Base URL</span><span class="val" id="cfg-MIMO_BASE_URL">-</span></div>
+        <label class="agent-default-row" style="margin-top:10px"><input type="checkbox" id="dash-default-mimo" onchange="setDashboardDefaultAgent('mimo', this.checked)"> 设为默认 Agent</label>
+        <button class="btn btn-outline" style="margin-top:8px" onclick="editSection('mimo')">编辑</button>
+      </div>
+    </details>
+
     <div class="card" id="dash-no-agent-hint" style="text-align:center;color:#94a3b8;display:none">
       未启用任何 AI Agent。点击下方按钮重新运行配置向导启用。
     </div>
@@ -860,8 +928,8 @@ header .badge{font-size:13px;padding:4px 12px;border-radius:12px;font-weight:500
 <script>
 let state = {
   view: 'loading',
-  // 三个 Agent 各自的启用开关；初始全 false，renderStep2() 会按已存在 config 自动打开
-  agentsEnabled: { claude: false, cursor: false, codex: false },
+  // 四个 Agent 各自的启用开关；初始全 false，renderStep2() 会按已存在 config 自动打开
+  agentsEnabled: { claude: false, cursor: false, codex: false, mimo: false },
   defaultAgent: 'claude',
   wizardStep: 1,
   config: {},
@@ -877,7 +945,8 @@ var step2InputBound = false;
 const AGENT_FIELDS = {
   claude: ['CHATCCC_ANTHROPIC_MODEL','CHATCCC_ANTHROPIC_SUBAGENT_MODEL','CHATCCC_ANTHROPIC_EFFORT','CHATCCC_ANTHROPIC_API_KEY','CHATCCC_ANTHROPIC_BASE_URL','CHATCCC_ANTHROPIC_MAX_TURN'],
   cursor: ['CHATCCC_CURSOR_PATH','CHATCCC_CURSOR_MODEL'],
-  codex: ['CHATCCC_CODEX_PATH','CHATCCC_CODEX_MODEL','CHATCCC_CODEX_EFFORT']
+  codex: ['CHATCCC_CODEX_PATH','CHATCCC_CODEX_MODEL','CHATCCC_CODEX_EFFORT'],
+  mimo: ['CHATCCC_MIMO_PATH','CHATCCC_MIMO_MODEL','CHATCCC_MIMO_API_KEY','CHATCCC_MIMO_BASE_URL']
 };
 const FEISHU_FIELDS = ['CHATCCC_APP_ID','CHATCCC_APP_SECRET'];
 
@@ -938,21 +1007,24 @@ function firstEnabledAgent() {
   if (state.agentsEnabled.claude) return 'claude';
   if (state.agentsEnabled.cursor) return 'cursor';
   if (state.agentsEnabled.codex) return 'codex';
+  if (state.agentsEnabled.mimo) return 'mimo';
   return null;
 }
 
-function resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn) {
+function resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn) {
   if (claudeOn && c.claude && c.claude.defaultAgent === true) return 'claude';
   if (cursorOn && c.cursor && c.cursor.defaultAgent === true) return 'cursor';
   if (codexOn && c.codex && c.codex.defaultAgent === true) return 'codex';
+  if (mimoOn && c.mimo && c.mimo.defaultAgent === true) return 'mimo';
   if (claudeOn) return 'claude';
   if (cursorOn) return 'cursor';
   if (codexOn) return 'codex';
+  if (mimoOn) return 'mimo';
   return 'claude';
 }
 
 function updateDefaultAgentToggles() {
-  ['claude','cursor','codex'].forEach(function(agent){
+  ['claude','cursor','codex','mimo'].forEach(function(agent){
     var el = document.getElementById('agent-default-' + agent);
     if (el) {
       el.checked = state.defaultAgent === agent;
@@ -1116,6 +1188,7 @@ function isAgentEnabled(node, keys) {
 var CLAUDE_FALLBACK_KEYS = ['model','subagentModel','effort','maxTurn'];
 var CURSOR_FALLBACK_KEYS = ['path','command','model'];
 var CODEX_FALLBACK_KEYS = ['path','command','model','effort'];
+var MIMO_FALLBACK_KEYS = ['path','command','model','apiKey','baseUrl'];
 
 function renderStep2() {
   var c = state.config || {};
@@ -1133,18 +1206,27 @@ function renderStep2() {
     prefillNested('field-CHATCCC_CODEX_MODEL', c.codex.model);
     prefillNested('field-CHATCCC_CODEX_EFFORT', c.codex.effort);
   }
+  if (c.mimo) {
+    prefillNested('field-CHATCCC_MIMO_PATH', c.mimo.path || c.mimo.command);
+    prefillNested('field-CHATCCC_MIMO_MODEL', c.mimo.model);
+    prefillNested('field-CHATCCC_MIMO_API_KEY', c.mimo.apiKey);
+    prefillNested('field-CHATCCC_MIMO_BASE_URL', c.mimo.baseUrl);
+  }
 
   // 按已有 config 决定每个 Agent 默认是否开启：优先 enabled 字段，缺省时按"任一字段非空"
   var claudeOn = isAgentEnabled(c.claude, CLAUDE_FALLBACK_KEYS);
   var cursorOn = isAgentEnabled(c.cursor, CURSOR_FALLBACK_KEYS);
   var codexOn = isAgentEnabled(c.codex, CODEX_FALLBACK_KEYS);
-  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn);
+  var mimoOn = isAgentEnabled(c.mimo, MIMO_FALLBACK_KEYS);
+  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn);
   document.getElementById('agent-enable-claude').checked = claudeOn;
   document.getElementById('agent-enable-cursor').checked = cursorOn;
   document.getElementById('agent-enable-codex').checked = codexOn;
+  document.getElementById('agent-enable-mimo').checked = mimoOn;
   onAgentToggle('claude', claudeOn);
   onAgentToggle('cursor', cursorOn);
   onAgentToggle('codex', codexOn);
+  onAgentToggle('mimo', mimoOn);
   updateDefaultAgentToggles();
 
   // Cursor path placeholder/hint：把已探测到的路径显示为占位
@@ -1286,16 +1368,19 @@ async function setDashboardDefaultAgent(agent, enabled) {
   var vars = {
     CHATCCC_CLAUDE_DEFAULT_AGENT: agent === 'claude',
     CHATCCC_CURSOR_DEFAULT_AGENT: agent === 'cursor',
-    CHATCCC_CODEX_DEFAULT_AGENT: agent === 'codex'
+    CHATCCC_CODEX_DEFAULT_AGENT: agent === 'codex',
+    CHATCCC_MIMO_DEFAULT_AGENT: agent === 'mimo'
   };
   var result = await api('/api/config', 'POST', { vars: vars });
   if (result.ok) {
     state.config.claude = state.config.claude || {};
     state.config.cursor = state.config.cursor || {};
     state.config.codex = state.config.codex || {};
+    state.config.mimo = state.config.mimo || {};
     state.config.claude.defaultAgent = agent === 'claude';
     state.config.cursor.defaultAgent = agent === 'cursor';
     state.config.codex.defaultAgent = agent === 'codex';
+    state.config.mimo.defaultAgent = agent === 'mimo';
     updateDefaultAgentToggles();
     toast('默认 Agent 已更新');
   } else {
@@ -1402,8 +1487,9 @@ function updateDashboardUI() {
   var claudeOn = isAgentEnabled(c.claude, CLAUDE_FALLBACK_KEYS);
   var cursorOn = isAgentEnabled(c.cursor, CURSOR_FALLBACK_KEYS);
   var codexOn = isAgentEnabled(c.codex, CODEX_FALLBACK_KEYS);
-  state.agentsEnabled = { claude: claudeOn, cursor: cursorOn, codex: codexOn };
-  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn);
+  var mimoOn = isAgentEnabled(c.mimo, MIMO_FALLBACK_KEYS);
+  state.agentsEnabled = { claude: claudeOn, cursor: cursorOn, codex: codexOn, mimo: mimoOn };
+  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn);
 
   // 微信 iLink 平台开关：同步复选框和标签
   var ilinkEnabled = c.platforms && c.platforms.ilink ? c.platforms.ilink.enabled !== false : true;
@@ -1422,6 +1508,7 @@ function updateDashboardUI() {
   document.getElementById('dash-claude').style.display = claudeOn ? '' : 'none';
   document.getElementById('dash-cursor').style.display = cursorOn ? '' : 'none';
   document.getElementById('dash-codex').style.display = codexOn ? '' : 'none';
+  document.getElementById('dash-mimo').style.display = mimoOn ? '' : 'none';
   updateDefaultAgentToggles();
   // 三个都未启用时给一个空态提示，引导用户去配置向导启用
   var emptyHint = document.getElementById('dash-no-agent-hint');
@@ -1438,6 +1525,10 @@ function updateDashboardUI() {
   document.getElementById('cfg-CODEX_PATH').textContent = (c.codex && (c.codex.path || c.codex.command)) || 'codex';
   document.getElementById('cfg-CODEX_MODEL').textContent = (c.codex && c.codex.model) || '(留空)';
   document.getElementById('cfg-CODEX_EFFORT').textContent = (c.codex && c.codex.effort) || '(留空)';
+  document.getElementById('cfg-MIMO_PATH').textContent = (c.mimo && (c.mimo.path || c.mimo.command)) || 'mimo';
+  document.getElementById('cfg-MIMO_MODEL').textContent = (c.mimo && c.mimo.model) || '(留空)';
+  document.getElementById('cfg-MIMO_API_KEY').textContent = (c.mimo && c.mimo.apiKey) ? '***已设置***' : '(留空)';
+  document.getElementById('cfg-MIMO_BASE_URL').textContent = (c.mimo && c.mimo.baseUrl) || '(留空)';
 }
 
 function pollStatus() {
@@ -1491,7 +1582,7 @@ function editSection(section) {
   if (section === 'feishu') fields = FEISHU_FIELDS;
   else fields = AGENT_FIELDS[section] || [];
 
-  var titleMap = { feishu: '飞书', claude: 'Claude Agent', cursor: 'Cursor Agent', codex: 'Codex Agent' };
+  var titleMap = { feishu: '飞书', claude: 'Claude Agent', cursor: 'Cursor Agent', codex: 'Codex Agent', mimo: 'MiMo Code Agent' };
   document.getElementById('edit-modal-title').textContent = '编辑 ' + (titleMap[section] || section);
 
   var html = '';
@@ -1500,7 +1591,8 @@ function editSection(section) {
     'CHATCCC_ANTHROPIC_MODEL': '模型', 'CHATCCC_ANTHROPIC_SUBAGENT_MODEL': 'Subagent 模型', 'CHATCCC_ANTHROPIC_EFFORT': 'Effort',
     'CHATCCC_ANTHROPIC_API_KEY': 'API Key', 'CHATCCC_ANTHROPIC_BASE_URL': 'Base URL', 'CHATCCC_ANTHROPIC_MAX_TURN': 'Max Turns (0=无限制)',
     'CHATCCC_CURSOR_PATH': 'CLI 路径', 'CHATCCC_CURSOR_MODEL': '模型',
-    'CHATCCC_CODEX_PATH': 'CLI 路径', 'CHATCCC_CODEX_MODEL': '模型', 'CHATCCC_CODEX_EFFORT': 'Effort'
+    'CHATCCC_CODEX_PATH': 'CLI 路径', 'CHATCCC_CODEX_MODEL': '模型', 'CHATCCC_CODEX_EFFORT': 'Effort',
+    'CHATCCC_MIMO_PATH': 'CLI 路径', 'CHATCCC_MIMO_MODEL': '模型', 'CHATCCC_MIMO_API_KEY': 'API Key', 'CHATCCC_MIMO_BASE_URL': 'Base URL'
   };
 
   fields.forEach(function(key){
@@ -1524,6 +1616,11 @@ function editSection(section) {
         if (key === 'CHATCCC_CODEX_PATH') val = state.config.codex.path || state.config.codex.command || '';
         else if (key === 'CHATCCC_CODEX_MODEL') val = state.config.codex.model || '';
         else if (key === 'CHATCCC_CODEX_EFFORT') val = state.config.codex.effort || '';
+      } else if (section === 'mimo' && state.config.mimo) {
+        if (key === 'CHATCCC_MIMO_PATH') val = state.config.mimo.path || state.config.mimo.command || '';
+        else if (key === 'CHATCCC_MIMO_MODEL') val = state.config.mimo.model || '';
+        else if (key === 'CHATCCC_MIMO_API_KEY') val = state.config.mimo.apiKey || '';
+        else if (key === 'CHATCCC_MIMO_BASE_URL') val = state.config.mimo.baseUrl || '';
       }
     }
     var isSecret = key.includes('SECRET') || key.includes('API_KEY');
