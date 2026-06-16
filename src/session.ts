@@ -30,6 +30,7 @@ import type { ToolProcessInfo } from "./adapters/adapter-interface.ts";
 import { createClaudeAdapter } from "./adapters/claude-adapter.ts";
 import { createCursorAdapter } from "./adapters/cursor-adapter.ts";
 import { createCodexAdapter } from "./adapters/codex-adapter.ts";
+import { createMimoAdapter } from "./adapters/mimo-adapter.ts";
 import { resourceMonitor, registerProcess, unregisterProcess } from "./adapters/resource-monitor.ts";
 import { buildImSkillsPromptCached, exportSkillSubDocs, clearImSkillsPromptCache } from "./im-skills.ts";
 import type { PlatformAdapter } from "./platform-adapter.ts";
@@ -338,6 +339,7 @@ export function getEffectiveModelForTool(tool: string, sessionId?: string): stri
   }
   if (tool === "cursor") return config.cursor.model;
   if (tool === "codex") return config.codex.model;
+  if (tool === "mimo") return config.mimo.model;
   return CLAUDE_MODEL;
 }
 
@@ -364,6 +366,8 @@ export function getAdapterForTool(tool: string, sessionId?: string): ToolAdapter
     adapter = createCursorAdapter({ model: effectiveModel || undefined });
   } else if (tool === "codex") {
     adapter = createCodexAdapter({ model: effectiveModel || undefined });
+  } else if (tool === "mimo") {
+    adapter = createMimoAdapter({ model: effectiveModel || undefined });
   } else {
     adapter = createClaudeAdapter({
       model: effectiveModel,
