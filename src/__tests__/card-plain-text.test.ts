@@ -16,6 +16,8 @@ describe("cardJsonToPlainText", () => {
     expect(text).toContain("/new");
     expect(text).toContain("/new cursor");
     expect(text).toContain("/new codex");
+    expect(text).toContain("/new mimo");
+    expect(text).toContain("/new deveco");
     expect(text).toContain("/restart");
     expect(text).toContain("/updateg");
     expect(text).toContain("/cd");
