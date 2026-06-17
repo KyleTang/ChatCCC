@@ -58,6 +58,7 @@ import {
   handleCommand,
   newGroupChatName,
 } from "../orchestrator.ts";
+import { config } from "../config.ts";
 import {
   _clearAdapterCacheForTest,
   _resetSessionRegistryFileForTest,
@@ -176,6 +177,7 @@ describe("handleCommand WeChat processing ack", () => {
   });
 
   it("cleans stale Feishu p2p binding, creates a group, and sends the private message as first prompt", async () => {
+    config.feishu.autoNewFromP2p = true;
     const platform = mockPlatform("feishu");
     const prompt = vi.fn(async function* (_sessionId: string, userText: string) {
       yield {
@@ -232,6 +234,16 @@ describe("handleCommand WeChat processing ack", () => {
     const registry = await loadSessionRegistryForBinding();
     expect(registry["feishu-p2p"]).toBeUndefined();
     expect(registry["feishu-group"]?.sessionId).toBe("sid-feishu-new");
+  });
+
+  it("does not auto-create group from Feishu p2p when autoNewFromP2p is false", async () => {
+    config.feishu.autoNewFromP2p = false;
+    const platform = mockPlatform("feishu");
+
+    await handleCommand(platform, "帮我看一下日志", "feishu-p2p", "ou-user", Date.now(), "p2p");
+
+    expect(platform.createGroup).not.toHaveBeenCalled();
+    expect(platform.sendRawCard).toHaveBeenCalled();
   });
 
   it("cleans stale Feishu p2p binding but keeps valid commands from auto-creating a group", async () => {

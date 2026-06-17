@@ -1443,8 +1443,12 @@ export async function handleCommand(
     return;
   }
 
-  // 飞书私聊普通消息：不再绑定私聊本身，而是自动创建会话群并把私聊内容作为首轮 prompt。
-  if (isNonWechatP2p(platform, chatType) && !textLower.startsWith("/")) {
+  // 飞书私聊普通消息：可选自动建群并把私聊内容作为首轮 prompt（feishu.autoNewFromP2p，默认 false）
+  if (
+    config.feishu.autoNewFromP2p &&
+    isNonWechatP2p(platform, chatType) &&
+    !textLower.startsWith("/")
+  ) {
     const tool = resolveDefaultAgentTool();
     const toolLabel = toolDisplayName(tool);
     logTrace(tid, "BRANCH", { cmd: "auto_new_from_p2p", tool });

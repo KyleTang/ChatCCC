@@ -38,7 +38,13 @@ import {
 // ---------------------------------------------------------------------------
 
 const baseAppConfig: AppConfig = {
-  feishu: { appId: "INITIAL_APP", appSecret: "INITIAL_SECRET" },
+  feishu: {
+    appId: "INITIAL_APP",
+    appSecret: "INITIAL_SECRET",
+    restartNotifyOpenId: "",
+    restartNotify: "p2p",
+    autoNewFromP2p: false,
+  },
   platforms: { feishu: { enabled: true }, ilink: { enabled: true } },
   port: 18080,
   gitTimeoutSeconds: 180,
@@ -76,7 +82,11 @@ describe("applyLoadedConfig — 刷新 export let 常量", () => {
 
     applyLoadedConfig({
       ...structuredClone(baseAppConfig),
-      feishu: { appId: "NEW_APP_ID", appSecret: "NEW_APP_SECRET" },
+      feishu: {
+        ...baseAppConfig.feishu,
+        appId: "NEW_APP_ID",
+        appSecret: "NEW_APP_SECRET",
+      },
     });
 
     // ES module live binding：测试模块顶层 import 的 APP_ID 会自动看到新值

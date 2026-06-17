@@ -101,7 +101,10 @@ import {
   rebuildSessionChatsFromRegistry,
   setQueueConsumer,
 } from "./session-chat-binding.ts";
-import { fixStaleStreamStates } from "./stream-state.ts";
+import {
+  notifyFeishuP2pOpenId,
+  printRestartNotifyStartupHint,
+} from "./feishu-restart-notify.ts";
 import { handleCommand, type PlatformAdapter } from "./orchestrator.ts";
 import { createWechatAdapter, startWechatPlatform } from "./wechat-platform.ts";
 
@@ -413,6 +416,10 @@ async function startBotServiceCore(): Promise<void> {
       console.log(`[MSG] sender=${openId} chat=${chatId} type=${chatType} text="${text}"`);
       appendChatLog(chatId, openId, text);
 
+      if (chatType === "p2p" && openId) {
+        notifyFeishuP2pOpenId(openId);
+      }
+
       if (messageId) {
         getTenantAccessToken().then((freshToken) =>
           addReaction(freshToken, messageId).catch((err) =>
@@ -574,6 +581,7 @@ async function startBotServiceCore(): Promise<void> {
     console.log("[WS] Feishu WebSocket connected (SDK)");
     console.log("[启动 7/7] 服务已就绪，等待飞书消息（群聊 / 卡片回调）。\n");
     printServiceRunningHint("sdk", `http://127.0.0.1:${CHATCCC_PORT}`);
+    printRestartNotifyStartupHint();
 
     sendRestartCard(token).catch((err) =>
       console.error(`[${ts()}] [RESTART] sendRestartCard failed: ${(err as Error).message}`)

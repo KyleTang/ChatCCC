@@ -1,7 +1,10 @@
 {
   "feishu": {
     "appId": "",
-    "appSecret": ""
+    "appSecret": "",
+    "restartNotifyOpenId": "",
+    "restartNotify": "p2p",
+    "autoNewFromP2p": false
   },
   "platforms": {
     "feishu": { "enabled": true, "platformType": "feishu" },

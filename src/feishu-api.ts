@@ -14,6 +14,7 @@ import {
   CURSOR_SESSION_PREFIX,
   CODEX_SESSION_PREFIX,
   DEVECO_SESSION_PREFIX,
+  config,
   ts,
   resolveDefaultAgentTool,
   toolDisplayName,
@@ -1245,54 +1246,96 @@ export async function sendRawCard(
   }
 }
 
-// 重启后，向最后有发言的会话发送 "已重启" 卡片（基于 chat_logs 的文件修改时间）
+// 重启后发送「已启动」帮助卡片
+async function sendInteractiveToReceiveId(
+  token: string,
+  receiveIdType: "chat_id" | "open_id",
+  receiveId: string,
+  cardJson: string,
+): Promise<boolean> {
+  const resp = await fetch(`${BASE_URL}/im/v1/messages?receive_id_type=${receiveIdType}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      receive_id: receiveId,
+      msg_type: "interactive",
+      content: cardJson,
+    }),
+  });
+  const data = (await resp.json().catch(() => ({}))) as { code: number; msg?: string };
+  if (data.code !== 0) {
+    console.error(
+      `[${ts()}] [RESTART] send FAIL: type=${receiveIdType} id=${receiveId} code=${data.code} msg="${data.msg ?? ""}"`,
+    );
+    return false;
+  }
+  return true;
+}
+
+async function resolveLatestActiveChatId(): Promise<string | null> {
+  const files = await readdir(CHAT_LOGS_DIR).catch(() => [] as string[]);
+  if (files.length === 0) return null;
+
+  let latestChatId: string | null = null;
+  let latestTime = 0;
+  for (const f of files) {
+    if (!f.endsWith(".jsonl")) continue;
+    const filePath = join(CHAT_LOGS_DIR, f);
+    const st = await stat(filePath).catch(() => null);
+    if (!st) continue;
+    if (st.mtimeMs > latestTime) {
+      latestTime = st.mtimeMs;
+      latestChatId = f.replace(".jsonl", "");
+    }
+  }
+  return latestChatId;
+}
+
 export async function sendRestartCard(token: string): Promise<void> {
   try {
-    const files = await readdir(CHAT_LOGS_DIR).catch(() => [] as string[]);
-    if (files.length === 0) {
-      console.log(`[${ts()}] [RESTART] No chat logs found, skipping notification`);
+    const mode = config.feishu.restartNotify;
+    if (mode === "off") {
+      console.log(`[${ts()}] [RESTART] Notification disabled (restartNotify=off)`);
       return;
     }
-
-    let latestChatId: string | null = null;
-    let latestTime = 0;
-    for (const f of files) {
-      if (!f.endsWith(".jsonl")) continue;
-      const filePath = join(CHAT_LOGS_DIR, f);
-      const st = await stat(filePath).catch(() => null);
-      if (!st) continue;
-      if (st.mtimeMs > latestTime) {
-        latestTime = st.mtimeMs;
-        latestChatId = f.replace(".jsonl", "");
-      }
-    }
-
-    if (!latestChatId) {
-      console.log(`[${ts()}] [RESTART] Could not determine latest chat with messages`);
-      return;
-    }
-
-    // 微信 chat ID 无法通过飞书 API 发送，跳过
-    if (latestChatId.includes("@im.wechat")) {
-      console.log(`[${ts()}] [RESTART] Latest chat is WeChat (${latestChatId}), skipping Feishu notification`);
-      return;
-    }
-
-    console.log(`[${ts()}] [RESTART] Latest active chat: ${latestChatId} (mtime=${new Date(latestTime).toISOString()})`);
 
     const restartCard = buildHelpCard("", {
       greeting: "Bot 已启动完成，可以继续使用。",
       defaultToolLabel: toolDisplayName(resolveDefaultAgentTool()),
     });
-    await fetch(`${BASE_URL}/im/v1/messages?receive_id_type=chat_id`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ receive_id: latestChatId, msg_type: "interactive", content: restartCard }),
-    });
-    console.log(`[${ts()}] [RESTART] Notification sent to chat ${latestChatId}`);
+
+    if (mode === "p2p") {
+      const openId = config.feishu.restartNotifyOpenId.trim();
+      if (!openId) {
+        console.log(`[${ts()}] [RESTART] restartNotify=p2p but restartNotifyOpenId empty, skipping`);
+        return;
+      }
+      const ok = await sendInteractiveToReceiveId(token, "open_id", openId, restartCard);
+      if (ok) {
+        console.log(`[${ts()}] [RESTART] Notification sent to p2p (open_id=${openId})`);
+      }
+      return;
+    }
+
+    const latestChatId = await resolveLatestActiveChatId();
+    if (!latestChatId) {
+      console.log(`[${ts()}] [RESTART] No chat logs found, skipping notification`);
+      return;
+    }
+
+    if (latestChatId.includes("@im.wechat")) {
+      console.log(`[${ts()}] [RESTART] Latest chat is WeChat (${latestChatId}), skipping Feishu notification`);
+      return;
+    }
+
+    console.log(`[${ts()}] [RESTART] Latest active chat: ${latestChatId}`);
+    const ok = await sendInteractiveToReceiveId(token, "chat_id", latestChatId, restartCard);
+    if (ok) {
+      console.log(`[${ts()}] [RESTART] Notification sent to chat ${latestChatId}`);
+    }
   } catch (err) {
     console.error(`[${ts()}] [RESTART] Failed to send notification: ${(err as Error).message}`);
   }

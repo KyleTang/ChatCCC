@@ -124,6 +124,12 @@ export interface DevecoConfig {
 export interface FeishuConfig {
   appId: string;
   appSecret: string;
+  /** 启动通知发到机器人私聊时使用的用户 open_id */
+  restartNotifyOpenId: string;
+  /** 启动通知目标：p2p=私聊 open_id，last=最近活跃会话，off=不发送 */
+  restartNotify: "p2p" | "last" | "off";
+  /** 飞书私聊收到普通消息时是否自动建群并创建会话（默认 false） */
+  autoNewFromP2p: boolean;
 }
 
 export interface PlatformConfig {
@@ -359,9 +365,19 @@ function normalizePlatformType(raw: string): "feishu" | "lark" {
   return "feishu";
 }
 
+function normalizeRestartNotify(raw: unknown): "p2p" | "last" | "off" {
+  if (raw === "last" || raw === "off") return raw;
+  return "p2p";
+}
+
+function readAutoNewFromP2p(feishuRaw: Record<string, unknown>): boolean {
+  const v = feishuRaw.autoNewFromP2p ?? feishuRaw.auto_new_from_p2p;
+  return v === true;
+}
+
 function loadConfig(): AppConfig {
   const defaults: AppConfig = {
-    feishu: { appId: "", appSecret: "" },
+    feishu: { appId: "", appSecret: "", restartNotifyOpenId: "", restartNotify: "p2p", autoNewFromP2p: false },
     platforms: { feishu: { enabled: true }, ilink: { enabled: true } },
     port: 18080,
     gitTimeoutSeconds: 180,
@@ -424,7 +440,10 @@ function loadConfig(): AppConfig {
     return defaults;
   }
 
-  const feishu = parsed.feishu ?? { appId: "", appSecret: "" };
+  const feishu = (parsed.feishu ?? { appId: "", appSecret: "" }) as Record<string, unknown> & {
+    appId?: string;
+    appSecret?: string;
+  };
   const claude = parsed.claude ?? {} as Partial<ClaudeConfig>;
   const cursorRaw = (parsed.cursor ?? {}) as NonNullable<typeof parsed.cursor>;
   const codexRaw = (parsed.codex ?? {}) as NonNullable<typeof parsed.codex>;
@@ -510,6 +529,11 @@ function loadConfig(): AppConfig {
     feishu: {
       appId: feishu.appId ?? "",
       appSecret: feishu.appSecret ?? "",
+      restartNotifyOpenId: normalizeOptionalConfigField(feishu.restartNotifyOpenId, {
+        label: "feishu.restartNotifyOpenId",
+      }),
+      restartNotify: normalizeRestartNotify(feishu.restartNotify),
+      autoNewFromP2p: readAutoNewFromP2p(feishu),
     },
     platforms: {
       feishu: {
