@@ -36,6 +36,7 @@ interface AppConfig {
   cursor?: { enabled?: boolean; defaultAgent?: boolean; path?: string; command?: string; model?: string };
   codex?: { enabled?: boolean; defaultAgent?: boolean; path?: string; command?: string; model?: string; effort?: string };
   mimo?: { enabled?: boolean; defaultAgent?: boolean; path?: string; command?: string; model?: string; apiKey?: string; baseUrl?: string };
+  deveco?: { enabled?: boolean; defaultAgent?: boolean; path?: string; command?: string; model?: string; agent?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +206,8 @@ function validateCli(tool: string): { ok: boolean; path?: string; error?: string
     cmd = readToolPath(cfg.cursor) || detectCursorAgentPath();
   } else if (tool === "mimo") {
     cmd = readToolPath(cfg.mimo) || "mimo";
+  } else if (tool === "deveco") {
+    cmd = readToolPath(cfg.deveco) || "deveco";
   } else {
     cmd = readToolPath(cfg.codex) || "codex";
   }
@@ -404,6 +407,21 @@ export function unflattenConfig(flat: Record<string, unknown>): Record<string, u
     } else if (key === "CHATCCC_MIMO_DEFAULT_AGENT") {
       result.mimo = result.mimo || {};
       (result.mimo as Record<string, unknown>).defaultAgent = val === true || val === "true";
+    } else if (key === "CHATCCC_DEVECO_PATH") {
+      result.deveco = result.deveco || {};
+      (result.deveco as Record<string, unknown>).path = val;
+    } else if (key === "CHATCCC_DEVECO_MODEL") {
+      result.deveco = result.deveco || {};
+      (result.deveco as Record<string, unknown>).model = val;
+    } else if (key === "CHATCCC_DEVECO_AGENT") {
+      result.deveco = result.deveco || {};
+      (result.deveco as Record<string, unknown>).agent = val;
+    } else if (key === "CHATCCC_DEVECO_ENABLED") {
+      result.deveco = result.deveco || {};
+      (result.deveco as Record<string, unknown>).enabled = val === true || val === "true";
+    } else if (key === "CHATCCC_DEVECO_DEFAULT_AGENT") {
+      result.deveco = result.deveco || {};
+      (result.deveco as Record<string, unknown>).defaultAgent = val === true || val === "true";
     }
   }
   return result;
@@ -789,6 +807,37 @@ header .badge{font-size:13px;padding:4px 12px;border-radius:12px;font-weight:500
           </fieldset>
         </div>
 
+        <!-- Deveco Code 卡片 -->
+        <div class="agent-card" id="agent-card-deveco">
+          <div class="agent-card-header">
+            <input type="checkbox" class="agent-toggle" id="agent-enable-deveco" onchange="onAgentToggle('deveco', this.checked)">
+            <div class="meta">
+              <div class="name">Deveco Code</div>
+              <div class="desc">HarmonyOS AI Agent（基于 OpenCode）<br>需安装并登录华为账号</div>
+            </div>
+          </div>
+          <label class="agent-default-row">
+            <input type="checkbox" id="agent-default-deveco" onchange="onDefaultAgentToggle('deveco', this.checked)">
+            设为默认 Agent
+          </label>
+          <fieldset class="agent-body" id="agent-body-deveco" disabled>
+            <div class="form-group">
+              <label>CLI 路径</label>
+              <input type="text" id="field-CHATCCC_DEVECO_PATH" placeholder="deveco">
+            </div>
+            <div class="form-group">
+              <label>模型</label>
+              <input type="text" id="field-CHATCCC_DEVECO_MODEL" placeholder="provider/model，留空使用默认">
+            </div>
+            <div class="form-group">
+              <label>Agent 模式</label>
+              <input type="text" id="field-CHATCCC_DEVECO_AGENT" placeholder="选填，对应 deveco run --agent">
+            </div>
+            <button class="btn btn-outline" onclick="validateCli('deveco')" style="margin-bottom:12px">检测 Deveco CLI</button>
+            <div id="deveco-validate-result"></div>
+          </fieldset>
+        </div>
+
       </div>
 
       <div class="btn-group" style="justify-content:space-between">
@@ -903,6 +952,17 @@ header .badge{font-size:13px;padding:4px 12px;border-radius:12px;font-weight:500
       </div>
     </details>
 
+    <details class="card config-section" id="dash-deveco">
+      <summary>Deveco Code Agent</summary>
+      <div class="section-detail">
+        <div class="config-row"><span class="key">CLI 路径</span><span class="val" id="cfg-DEVECO_PATH">-</span></div>
+        <div class="config-row"><span class="key">模型</span><span class="val" id="cfg-DEVECO_MODEL">-</span></div>
+        <div class="config-row"><span class="key">Agent 模式</span><span class="val" id="cfg-DEVECO_AGENT">-</span></div>
+        <label class="agent-default-row" style="margin-top:10px"><input type="checkbox" id="dash-default-deveco" onchange="setDashboardDefaultAgent('deveco', this.checked)"> 设为默认 Agent</label>
+        <button class="btn btn-outline" style="margin-top:8px" onclick="editSection('deveco')">编辑</button>
+      </div>
+    </details>
+
     <div class="card" id="dash-no-agent-hint" style="text-align:center;color:#94a3b8;display:none">
       未启用任何 AI Agent。点击下方按钮重新运行配置向导启用。
     </div>
@@ -929,7 +989,7 @@ header .badge{font-size:13px;padding:4px 12px;border-radius:12px;font-weight:500
 let state = {
   view: 'loading',
   // 四个 Agent 各自的启用开关；初始全 false，renderStep2() 会按已存在 config 自动打开
-  agentsEnabled: { claude: false, cursor: false, codex: false, mimo: false },
+  agentsEnabled: { claude: false, cursor: false, codex: false, mimo: false, deveco: false },
   defaultAgent: 'claude',
   wizardStep: 1,
   config: {},
@@ -946,7 +1006,8 @@ const AGENT_FIELDS = {
   claude: ['CHATCCC_ANTHROPIC_MODEL','CHATCCC_ANTHROPIC_SUBAGENT_MODEL','CHATCCC_ANTHROPIC_EFFORT','CHATCCC_ANTHROPIC_API_KEY','CHATCCC_ANTHROPIC_BASE_URL','CHATCCC_ANTHROPIC_MAX_TURN'],
   cursor: ['CHATCCC_CURSOR_PATH','CHATCCC_CURSOR_MODEL'],
   codex: ['CHATCCC_CODEX_PATH','CHATCCC_CODEX_MODEL','CHATCCC_CODEX_EFFORT'],
-  mimo: ['CHATCCC_MIMO_PATH','CHATCCC_MIMO_MODEL','CHATCCC_MIMO_API_KEY','CHATCCC_MIMO_BASE_URL']
+  mimo: ['CHATCCC_MIMO_PATH','CHATCCC_MIMO_MODEL','CHATCCC_MIMO_API_KEY','CHATCCC_MIMO_BASE_URL'],
+  deveco: ['CHATCCC_DEVECO_PATH','CHATCCC_DEVECO_MODEL','CHATCCC_DEVECO_AGENT']
 };
 const FEISHU_FIELDS = ['CHATCCC_APP_ID','CHATCCC_APP_SECRET'];
 
@@ -1008,23 +1069,26 @@ function firstEnabledAgent() {
   if (state.agentsEnabled.cursor) return 'cursor';
   if (state.agentsEnabled.codex) return 'codex';
   if (state.agentsEnabled.mimo) return 'mimo';
+  if (state.agentsEnabled.deveco) return 'deveco';
   return null;
 }
 
-function resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn) {
+function resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn, devecoOn) {
   if (claudeOn && c.claude && c.claude.defaultAgent === true) return 'claude';
   if (cursorOn && c.cursor && c.cursor.defaultAgent === true) return 'cursor';
   if (codexOn && c.codex && c.codex.defaultAgent === true) return 'codex';
   if (mimoOn && c.mimo && c.mimo.defaultAgent === true) return 'mimo';
+  if (devecoOn && c.deveco && c.deveco.defaultAgent === true) return 'deveco';
   if (claudeOn) return 'claude';
   if (cursorOn) return 'cursor';
   if (codexOn) return 'codex';
   if (mimoOn) return 'mimo';
+  if (devecoOn) return 'deveco';
   return 'claude';
 }
 
 function updateDefaultAgentToggles() {
-  ['claude','cursor','codex','mimo'].forEach(function(agent){
+  ['claude','cursor','codex','mimo','deveco'].forEach(function(agent){
     var el = document.getElementById('agent-default-' + agent);
     if (el) {
       el.checked = state.defaultAgent === agent;
@@ -1189,6 +1253,7 @@ var CLAUDE_FALLBACK_KEYS = ['model','subagentModel','effort','maxTurn'];
 var CURSOR_FALLBACK_KEYS = ['path','command','model'];
 var CODEX_FALLBACK_KEYS = ['path','command','model','effort'];
 var MIMO_FALLBACK_KEYS = ['path','command','model','apiKey','baseUrl'];
+var DEVECO_FALLBACK_KEYS = ['path','command','model','agent'];
 
 function renderStep2() {
   var c = state.config || {};
@@ -1212,21 +1277,29 @@ function renderStep2() {
     prefillNested('field-CHATCCC_MIMO_API_KEY', c.mimo.apiKey);
     prefillNested('field-CHATCCC_MIMO_BASE_URL', c.mimo.baseUrl);
   }
+  if (c.deveco) {
+    prefillNested('field-CHATCCC_DEVECO_PATH', c.deveco.path || c.deveco.command);
+    prefillNested('field-CHATCCC_DEVECO_MODEL', c.deveco.model);
+    prefillNested('field-CHATCCC_DEVECO_AGENT', c.deveco.agent);
+  }
 
   // 按已有 config 决定每个 Agent 默认是否开启：优先 enabled 字段，缺省时按"任一字段非空"
   var claudeOn = isAgentEnabled(c.claude, CLAUDE_FALLBACK_KEYS);
   var cursorOn = isAgentEnabled(c.cursor, CURSOR_FALLBACK_KEYS);
   var codexOn = isAgentEnabled(c.codex, CODEX_FALLBACK_KEYS);
   var mimoOn = isAgentEnabled(c.mimo, MIMO_FALLBACK_KEYS);
-  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn);
+  var devecoOn = isAgentEnabled(c.deveco, DEVECO_FALLBACK_KEYS);
+  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn, devecoOn);
   document.getElementById('agent-enable-claude').checked = claudeOn;
   document.getElementById('agent-enable-cursor').checked = cursorOn;
   document.getElementById('agent-enable-codex').checked = codexOn;
   document.getElementById('agent-enable-mimo').checked = mimoOn;
+  document.getElementById('agent-enable-deveco').checked = devecoOn;
   onAgentToggle('claude', claudeOn);
   onAgentToggle('cursor', cursorOn);
   onAgentToggle('codex', codexOn);
   onAgentToggle('mimo', mimoOn);
+  onAgentToggle('deveco', devecoOn);
   updateDefaultAgentToggles();
 
   // Cursor path placeholder/hint：把已探测到的路径显示为占位
@@ -1268,12 +1341,16 @@ function collectAllFields() {
   vars.CHATCCC_CLAUDE_ENABLED = !!state.agentsEnabled.claude;
   vars.CHATCCC_CURSOR_ENABLED = !!state.agentsEnabled.cursor;
   vars.CHATCCC_CODEX_ENABLED = !!state.agentsEnabled.codex;
+  vars.CHATCCC_MIMO_ENABLED = !!state.agentsEnabled.mimo;
+  vars.CHATCCC_DEVECO_ENABLED = !!state.agentsEnabled.deveco;
   if (!state.defaultAgent || !state.agentsEnabled[state.defaultAgent]) {
     state.defaultAgent = firstEnabledAgent();
   }
   vars.CHATCCC_CLAUDE_DEFAULT_AGENT = state.defaultAgent === 'claude';
   vars.CHATCCC_CURSOR_DEFAULT_AGENT = state.defaultAgent === 'cursor';
   vars.CHATCCC_CODEX_DEFAULT_AGENT = state.defaultAgent === 'codex';
+  vars.CHATCCC_MIMO_DEFAULT_AGENT = state.defaultAgent === 'mimo';
+  vars.CHATCCC_DEVECO_DEFAULT_AGENT = state.defaultAgent === 'deveco';
   if (state.agentsEnabled.claude) {
     AGENT_FIELDS.claude.forEach(function(key){
       var el = document.getElementById('field-' + key);
@@ -1288,6 +1365,18 @@ function collectAllFields() {
   }
   if (state.agentsEnabled.codex) {
     AGENT_FIELDS.codex.forEach(function(key){
+      var el = document.getElementById('field-' + key);
+      if (el && el.value.trim()) vars[key] = el.value.trim();
+    });
+  }
+  if (state.agentsEnabled.mimo) {
+    AGENT_FIELDS.mimo.forEach(function(key){
+      var el = document.getElementById('field-' + key);
+      if (el && el.value.trim()) vars[key] = el.value.trim();
+    });
+  }
+  if (state.agentsEnabled.deveco) {
+    AGENT_FIELDS.deveco.forEach(function(key){
       var el = document.getElementById('field-' + key);
       if (el && el.value.trim()) vars[key] = el.value.trim();
     });
@@ -1320,10 +1409,13 @@ function renderStep3() {
   if (state.agentsEnabled.claude) enabledList.push('claude');
   if (state.agentsEnabled.cursor) enabledList.push('cursor');
   if (state.agentsEnabled.codex) enabledList.push('codex');
+  if (state.agentsEnabled.mimo) enabledList.push('mimo');
+  if (state.agentsEnabled.deveco) enabledList.push('deveco');
   if (enabledList.length === 0) {
     lines.push('<div style="color:#ef4444">未启用任何 AI Agent</div>');
   } else {
-    var defaultLabel = state.defaultAgent === 'cursor' ? 'Cursor' : state.defaultAgent === 'codex' ? 'Codex' : 'Claude Code';
+    var defaultLabels = { claude: 'Claude Code', cursor: 'Cursor', codex: 'Codex', mimo: 'MiMo Code', deveco: 'Deveco Code' };
+    var defaultLabel = defaultLabels[state.defaultAgent] || 'Claude Code';
     lines.push('<div class="config-row"><span class="key">/new 默认 Agent</span><span class="val">' + defaultLabel + '</span></div>');
   }
   enabledList.forEach(function(t){
@@ -1343,6 +1435,15 @@ function renderStep3() {
       if (vars.CHATCCC_CODEX_PATH) lines.push('<div class="config-row"><span class="key">CLI 路径</span><span class="val">' + vars.CHATCCC_CODEX_PATH + '</span></div>');
       lines.push('<div class="config-row"><span class="key">模型</span><span class="val">' + (vars.CHATCCC_CODEX_MODEL || '(留空)') + '</span></div>');
       lines.push('<div class="config-row"><span class="key">Effort</span><span class="val">' + (vars.CHATCCC_CODEX_EFFORT || '(留空)') + '</span></div>');
+    } else if (t === 'mimo') {
+      lines.push('<h4 style="margin:10px 0 4px;color:#334155">MiMo Code</h4>');
+      if (vars.CHATCCC_MIMO_PATH) lines.push('<div class="config-row"><span class="key">CLI 路径</span><span class="val">' + vars.CHATCCC_MIMO_PATH + '</span></div>');
+      lines.push('<div class="config-row"><span class="key">模型</span><span class="val">' + (vars.CHATCCC_MIMO_MODEL || '(留空)') + '</span></div>');
+    } else if (t === 'deveco') {
+      lines.push('<h4 style="margin:10px 0 4px;color:#334155">Deveco Code</h4>');
+      if (vars.CHATCCC_DEVECO_PATH) lines.push('<div class="config-row"><span class="key">CLI 路径</span><span class="val">' + vars.CHATCCC_DEVECO_PATH + '</span></div>');
+      lines.push('<div class="config-row"><span class="key">模型</span><span class="val">' + (vars.CHATCCC_DEVECO_MODEL || '(留空)') + '</span></div>');
+      lines.push('<div class="config-row"><span class="key">Agent 模式</span><span class="val">' + (vars.CHATCCC_DEVECO_AGENT || '(留空)') + '</span></div>');
     }
   });
   document.getElementById('review-content').innerHTML = lines.join('');
@@ -1369,7 +1470,8 @@ async function setDashboardDefaultAgent(agent, enabled) {
     CHATCCC_CLAUDE_DEFAULT_AGENT: agent === 'claude',
     CHATCCC_CURSOR_DEFAULT_AGENT: agent === 'cursor',
     CHATCCC_CODEX_DEFAULT_AGENT: agent === 'codex',
-    CHATCCC_MIMO_DEFAULT_AGENT: agent === 'mimo'
+    CHATCCC_MIMO_DEFAULT_AGENT: agent === 'mimo',
+    CHATCCC_DEVECO_DEFAULT_AGENT: agent === 'deveco'
   };
   var result = await api('/api/config', 'POST', { vars: vars });
   if (result.ok) {
@@ -1377,10 +1479,12 @@ async function setDashboardDefaultAgent(agent, enabled) {
     state.config.cursor = state.config.cursor || {};
     state.config.codex = state.config.codex || {};
     state.config.mimo = state.config.mimo || {};
+    state.config.deveco = state.config.deveco || {};
     state.config.claude.defaultAgent = agent === 'claude';
     state.config.cursor.defaultAgent = agent === 'cursor';
     state.config.codex.defaultAgent = agent === 'codex';
     state.config.mimo.defaultAgent = agent === 'mimo';
+    state.config.deveco.defaultAgent = agent === 'deveco';
     updateDefaultAgentToggles();
     toast('默认 Agent 已更新');
   } else {
@@ -1488,8 +1592,9 @@ function updateDashboardUI() {
   var cursorOn = isAgentEnabled(c.cursor, CURSOR_FALLBACK_KEYS);
   var codexOn = isAgentEnabled(c.codex, CODEX_FALLBACK_KEYS);
   var mimoOn = isAgentEnabled(c.mimo, MIMO_FALLBACK_KEYS);
-  state.agentsEnabled = { claude: claudeOn, cursor: cursorOn, codex: codexOn, mimo: mimoOn };
-  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn);
+  var devecoOn = isAgentEnabled(c.deveco, DEVECO_FALLBACK_KEYS);
+  state.agentsEnabled = { claude: claudeOn, cursor: cursorOn, codex: codexOn, mimo: mimoOn, deveco: devecoOn };
+  state.defaultAgent = resolveDefaultAgentFromConfig(c, claudeOn, cursorOn, codexOn, mimoOn, devecoOn);
 
   // 微信 iLink 平台开关：同步复选框和标签
   var ilinkEnabled = c.platforms && c.platforms.ilink ? c.platforms.ilink.enabled !== false : true;
@@ -1509,6 +1614,7 @@ function updateDashboardUI() {
   document.getElementById('dash-cursor').style.display = cursorOn ? '' : 'none';
   document.getElementById('dash-codex').style.display = codexOn ? '' : 'none';
   document.getElementById('dash-mimo').style.display = mimoOn ? '' : 'none';
+  document.getElementById('dash-deveco').style.display = devecoOn ? '' : 'none';
   updateDefaultAgentToggles();
   // 三个都未启用时给一个空态提示，引导用户去配置向导启用
   var emptyHint = document.getElementById('dash-no-agent-hint');
@@ -1529,6 +1635,9 @@ function updateDashboardUI() {
   document.getElementById('cfg-MIMO_MODEL').textContent = (c.mimo && c.mimo.model) || '(留空)';
   document.getElementById('cfg-MIMO_API_KEY').textContent = (c.mimo && c.mimo.apiKey) ? '***已设置***' : '(留空)';
   document.getElementById('cfg-MIMO_BASE_URL').textContent = (c.mimo && c.mimo.baseUrl) || '(留空)';
+  document.getElementById('cfg-DEVECO_PATH').textContent = (c.deveco && (c.deveco.path || c.deveco.command)) || 'deveco';
+  document.getElementById('cfg-DEVECO_MODEL').textContent = (c.deveco && c.deveco.model) || '(留空)';
+  document.getElementById('cfg-DEVECO_AGENT').textContent = (c.deveco && c.deveco.agent) || '(留空)';
 }
 
 function pollStatus() {
@@ -1582,7 +1691,7 @@ function editSection(section) {
   if (section === 'feishu') fields = FEISHU_FIELDS;
   else fields = AGENT_FIELDS[section] || [];
 
-  var titleMap = { feishu: '飞书', claude: 'Claude Agent', cursor: 'Cursor Agent', codex: 'Codex Agent', mimo: 'MiMo Code Agent' };
+  var titleMap = { feishu: '飞书', claude: 'Claude Agent', cursor: 'Cursor Agent', codex: 'Codex Agent', mimo: 'MiMo Code Agent', deveco: 'Deveco Code Agent' };
   document.getElementById('edit-modal-title').textContent = '编辑 ' + (titleMap[section] || section);
 
   var html = '';
@@ -1592,7 +1701,8 @@ function editSection(section) {
     'CHATCCC_ANTHROPIC_API_KEY': 'API Key', 'CHATCCC_ANTHROPIC_BASE_URL': 'Base URL', 'CHATCCC_ANTHROPIC_MAX_TURN': 'Max Turns (0=无限制)',
     'CHATCCC_CURSOR_PATH': 'CLI 路径', 'CHATCCC_CURSOR_MODEL': '模型',
     'CHATCCC_CODEX_PATH': 'CLI 路径', 'CHATCCC_CODEX_MODEL': '模型', 'CHATCCC_CODEX_EFFORT': 'Effort',
-    'CHATCCC_MIMO_PATH': 'CLI 路径', 'CHATCCC_MIMO_MODEL': '模型', 'CHATCCC_MIMO_API_KEY': 'API Key', 'CHATCCC_MIMO_BASE_URL': 'Base URL'
+    'CHATCCC_MIMO_PATH': 'CLI 路径', 'CHATCCC_MIMO_MODEL': '模型', 'CHATCCC_MIMO_API_KEY': 'API Key', 'CHATCCC_MIMO_BASE_URL': 'Base URL',
+    'CHATCCC_DEVECO_PATH': 'CLI 路径', 'CHATCCC_DEVECO_MODEL': '模型', 'CHATCCC_DEVECO_AGENT': 'Agent 模式'
   };
 
   fields.forEach(function(key){
@@ -1621,6 +1731,10 @@ function editSection(section) {
         else if (key === 'CHATCCC_MIMO_MODEL') val = state.config.mimo.model || '';
         else if (key === 'CHATCCC_MIMO_API_KEY') val = state.config.mimo.apiKey || '';
         else if (key === 'CHATCCC_MIMO_BASE_URL') val = state.config.mimo.baseUrl || '';
+      } else if (section === 'deveco' && state.config.deveco) {
+        if (key === 'CHATCCC_DEVECO_PATH') val = state.config.deveco.path || state.config.deveco.command || '';
+        else if (key === 'CHATCCC_DEVECO_MODEL') val = state.config.deveco.model || '';
+        else if (key === 'CHATCCC_DEVECO_AGENT') val = state.config.deveco.agent || '';
       }
     }
     var isSecret = key.includes('SECRET') || key.includes('API_KEY');

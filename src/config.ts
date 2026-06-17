@@ -108,6 +108,19 @@ export interface MimoConfig {
   baseUrl: string;
 }
 
+export interface DevecoConfig {
+  /** 是否启用 Deveco Code Agent；缺省时按"有任意字段非空"自动判定（向后兼容） */
+  enabled: boolean;
+  /** 是否作为 /new 未指定工具时使用的默认 Agent */
+  defaultAgent: boolean;
+  /** Deveco Code CLI 可执行文件绝对路径；留空时退回到 PATH 中的 `deveco` */
+  path: string;
+  /** 模型，格式 provider/model；留空则由 Deveco Code 配置决定 */
+  model: string;
+  /** HarmonyOS Agent 模式名称（选填，对应 deveco run --agent） */
+  agent: string;
+}
+
 export interface FeishuConfig {
   appId: string;
   appSecret: string;
@@ -136,10 +149,11 @@ export interface AppConfig {
   cursor: CursorConfig;
   codex: CodexConfig;
   mimo: MimoConfig;
+  deveco: DevecoConfig;
 }
 
-export type AgentTool = "claude" | "cursor" | "codex" | "mimo";
-export const AGENT_TOOLS: AgentTool[] = ["claude", "cursor", "codex", "mimo"];
+export type AgentTool = "claude" | "cursor" | "codex" | "mimo" | "deveco";
+export const AGENT_TOOLS: AgentTool[] = ["claude", "cursor", "codex", "mimo", "deveco"];
 
 /** 获取指定 agent 配置中所有模型相关的值（最多 100 个，去重） */
 export function getAllModelsForTool(tool: AgentTool, cfg: AppConfig = config): string[] {
@@ -157,6 +171,8 @@ export function getAllModelsForTool(tool: AgentTool, cfg: AppConfig = config): s
     collect(cfg.codex.model);
   } else if (tool === "mimo") {
     collect(cfg.mimo.model);
+  } else if (tool === "deveco") {
+    collect(cfg.deveco.model);
   }
 
   return Array.from(seen).slice(0, 100);
@@ -354,6 +370,7 @@ function loadConfig(): AppConfig {
     cursor: { enabled: false, defaultAgent: false, path: "", model: "claude-opus-4-7-max" },
     codex: { enabled: false, defaultAgent: false, path: "", model: "", effort: "" },
     mimo: { enabled: false, defaultAgent: false, path: "", model: "", apiKey: "", baseUrl: "" },
+    deveco: { enabled: false, defaultAgent: false, path: "", model: "", agent: "" },
   };
 
   if (!IS_TEST_ENV) {
@@ -398,6 +415,7 @@ function loadConfig(): AppConfig {
     cursor?: { enabled?: unknown; defaultAgent?: unknown; path?: unknown; command?: unknown; model?: unknown };
     codex?: { enabled?: unknown; defaultAgent?: unknown; path?: unknown; command?: unknown; model?: unknown; effort?: unknown };
     mimo?: { enabled?: unknown; defaultAgent?: unknown; path?: unknown; command?: unknown; model?: unknown; apiKey?: unknown; baseUrl?: unknown };
+    deveco?: { enabled?: unknown; defaultAgent?: unknown; path?: unknown; command?: unknown; model?: unknown; agent?: unknown };
   };
   try {
     parsed = JSON.parse(raw);
@@ -411,6 +429,7 @@ function loadConfig(): AppConfig {
   const cursorRaw = (parsed.cursor ?? {}) as NonNullable<typeof parsed.cursor>;
   const codexRaw = (parsed.codex ?? {}) as NonNullable<typeof parsed.codex>;
   const mimoRaw = (parsed.mimo ?? {}) as NonNullable<typeof parsed.mimo>;
+  const devecoRaw = (parsed.deveco ?? {}) as NonNullable<typeof parsed.deveco>;
 
   // 兼容旧字段 `command`：命中时打印一次性 warning 提示用户改名
   const onLegacyField = (label: string, value: string): void => {
@@ -458,22 +477,32 @@ function loadConfig(): AppConfig {
       (typeof mimoRaw.apiKey === "string" && (mimoRaw.apiKey as string).trim()) ||
       (typeof mimoRaw.baseUrl === "string" && (mimoRaw.baseUrl as string).trim()),
     );
+  const devecoNonEmpty = (): boolean =>
+    Boolean(
+      (typeof devecoRaw.path === "string" && devecoRaw.path.trim()) ||
+      (typeof devecoRaw.command === "string" && (devecoRaw.command as string).trim()) ||
+      (typeof devecoRaw.model === "string" && (devecoRaw.model as string).trim()) ||
+      (typeof devecoRaw.agent === "string" && (devecoRaw.agent as string).trim()),
+    );
 
   const claudeEnabled = resolveEnabled(claude.enabled, claudeNonEmpty);
   const cursorEnabled = resolveEnabled(cursorRaw.enabled, cursorNonEmpty);
   const codexEnabled = resolveEnabled(codexRaw.enabled, codexNonEmpty);
   const mimoEnabled = resolveEnabled(mimoRaw.enabled, mimoNonEmpty);
+  const devecoEnabled = resolveEnabled(devecoRaw.enabled, devecoNonEmpty);
   const explicitDefaultTool: AgentTool | null =
     typeof claude.defaultAgent === "boolean" && claude.defaultAgent && claudeEnabled ? "claude" :
     typeof cursorRaw.defaultAgent === "boolean" && cursorRaw.defaultAgent && cursorEnabled ? "cursor" :
     typeof codexRaw.defaultAgent === "boolean" && codexRaw.defaultAgent && codexEnabled ? "codex" :
     typeof mimoRaw.defaultAgent === "boolean" && mimoRaw.defaultAgent && mimoEnabled ? "mimo" :
+    typeof devecoRaw.defaultAgent === "boolean" && devecoRaw.defaultAgent && devecoEnabled ? "deveco" :
     null;
   const fallbackDefaultTool: AgentTool =
     claudeEnabled ? "claude" :
     cursorEnabled ? "cursor" :
     codexEnabled ? "codex" :
     mimoEnabled ? "mimo" :
+    devecoEnabled ? "deveco" :
     "claude";
   const defaultTool = explicitDefaultTool ?? fallbackDefaultTool;
 
@@ -537,6 +566,13 @@ function loadConfig(): AppConfig {
       model: normalizeOptionalConfigField(mimoRaw.model, { label: "mimo.model" }),
       apiKey: normalizeOptionalConfigField(mimoRaw.apiKey, { label: "mimo.apiKey" }),
       baseUrl: normalizeOptionalConfigField(mimoRaw.baseUrl, { label: "mimo.baseUrl" }),
+    },
+    deveco: {
+      enabled: devecoEnabled,
+      defaultAgent: defaultTool === "deveco",
+      path: readToolCliPath(devecoRaw, { label: "deveco", onLegacyField }),
+      model: normalizeOptionalConfigField(devecoRaw.model, { label: "deveco.model" }),
+      agent: normalizeOptionalConfigField(devecoRaw.agent, { label: "deveco.agent" }),
     },
   };
 }
@@ -875,11 +911,14 @@ export const CLAUDE_SESSION_PREFIX = "Claude Code Session:";
 export const CURSOR_SESSION_PREFIX = "Cursor Session:";
 /** 群描述中用于识别 Codex 会话的前缀 */
 export const CODEX_SESSION_PREFIX = "Codex Session:";
+/** 群描述中用于识别 Deveco Code 会话的前缀 */
+export const DEVECO_SESSION_PREFIX = "Deveco Code Session:";
 
 /** 根据 tool 名称返回对应的群描述前缀 */
 export function sessionPrefixForTool(tool: string): string {
   if (tool === "cursor") return CURSOR_SESSION_PREFIX;
   if (tool === "codex") return CODEX_SESSION_PREFIX;
+  if (tool === "deveco") return DEVECO_SESSION_PREFIX;
   return CLAUDE_SESSION_PREFIX;
 }
 
@@ -888,6 +927,7 @@ export function toolDisplayName(tool: string): string {
   if (tool === "cursor") return "Cursor";
   if (tool === "codex") return "Codex";
   if (tool === "mimo") return "MiMo Code";
+  if (tool === "deveco") return "Deveco Code";
   return "Claude Code";
 }
 

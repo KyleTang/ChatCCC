@@ -40,5 +40,12 @@
     "model": "",
     "apiKey": "",
     "baseUrl": ""
+  },
+  "deveco": {
+    "enabled": false,
+    "defaultAgent": false,
+    "path": "",
+    "model": "",
+    "agent": ""
   }
 }

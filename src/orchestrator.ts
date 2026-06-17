@@ -468,13 +468,13 @@ export async function handleCommand(
     const toolArg = text.slice(5).trim().toLowerCase();
     const tool = toolArg || resolveDefaultAgentTool();
     logTrace(tid, "BRANCH", { cmd: "/new", tool });
-    const validTools = ["claude", "cursor", "codex", "mimo"];
+    const validTools = ["claude", "cursor", "codex", "mimo", "deveco"];
     if (!validTools.includes(tool)) {
       logTrace(tid, "DONE", { outcome: "new_invalid_tool", tool });
       await platform.sendCard(
         chatId,
         "Error",
-        `未知的工具类型: "${toolArg}"。支持: claude (Claude Code), cursor (Cursor), codex (Codex), mimo (MiMo Code)。`,
+        `未知的工具类型: "${toolArg}"。支持: claude (Claude Code), cursor (Cursor), codex (Codex), mimo (MiMo Code), deveco (Deveco Code)。`,
         "red",
       );
       return;

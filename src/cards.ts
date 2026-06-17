@@ -1,6 +1,4 @@
-// ---------------------------------------------------------------------------
-// Button helpers
-// ---------------------------------------------------------------------------
+import { toolDisplayName } from "./config.ts";
 
 export interface ButtonDef {
   text: string;
@@ -311,7 +309,7 @@ export function buildSessionsCard(sessions: Array<{
       const secs = s.elapsedSeconds % 60;
       extra = ` | 本轮: ${mins}分${secs}秒`;
     }
-    const toolLabel = s.tool === "cursor" ? "Cursor" : s.tool === "codex" ? "Codex" : "Claude Code";
+    const toolLabel = toolDisplayName(s.tool);
     const namePart = s.chatName ? `**${s.chatName}** ` : "";
     const chatTag = !s.chatId ? " (chat id缺失)" : s.chatId.startsWith("oc_") ? " (群聊)" : "";
     return `**${i + 1}.** ${namePart}${chatTag} \`${shortId}\` ${status} | 工具: ${toolLabel} | 轮数: ${s.turnCount} | ${s.model}${extra}`;

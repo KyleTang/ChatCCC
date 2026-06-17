@@ -13,6 +13,7 @@ import {
   CLAUDE_SESSION_PREFIX,
   CURSOR_SESSION_PREFIX,
   CODEX_SESSION_PREFIX,
+  DEVECO_SESSION_PREFIX,
   ts,
   resolveDefaultAgentTool,
   toolDisplayName,
@@ -471,6 +472,7 @@ export function extractSessionInfo(description: string): { sessionId: string; to
     { prefix: CLAUDE_SESSION_PREFIX, tool: "claude" },
     { prefix: CURSOR_SESSION_PREFIX, tool: "cursor" },
     { prefix: CODEX_SESSION_PREFIX, tool: "codex" },
+    { prefix: DEVECO_SESSION_PREFIX, tool: "deveco" },
   ];
   for (const { prefix, tool } of PREFIXES) {
     const idx = description.indexOf(prefix);

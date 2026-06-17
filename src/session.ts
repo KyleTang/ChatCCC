@@ -31,6 +31,7 @@ import { createClaudeAdapter } from "./adapters/claude-adapter.ts";
 import { createCursorAdapter } from "./adapters/cursor-adapter.ts";
 import { createCodexAdapter } from "./adapters/codex-adapter.ts";
 import { createMimoAdapter } from "./adapters/mimo-adapter.ts";
+import { createDevecoAdapter } from "./adapters/deveco-adapter.ts";
 import { resourceMonitor, registerProcess, unregisterProcess } from "./adapters/resource-monitor.ts";
 import { buildImSkillsPromptCached, exportSkillSubDocs, clearImSkillsPromptCache } from "./im-skills.ts";
 import type { PlatformAdapter } from "./platform-adapter.ts";
@@ -340,6 +341,7 @@ export function getEffectiveModelForTool(tool: string, sessionId?: string): stri
   if (tool === "cursor") return config.cursor.model;
   if (tool === "codex") return config.codex.model;
   if (tool === "mimo") return config.mimo.model;
+  if (tool === "deveco") return config.deveco.model;
   return CLAUDE_MODEL;
 }
 
@@ -368,6 +370,8 @@ export function getAdapterForTool(tool: string, sessionId?: string): ToolAdapter
     adapter = createCodexAdapter({ model: effectiveModel || undefined });
   } else if (tool === "mimo") {
     adapter = createMimoAdapter({ model: effectiveModel || undefined });
+  } else if (tool === "deveco") {
+    adapter = createDevecoAdapter({ model: effectiveModel || undefined });
   } else {
     adapter = createClaudeAdapter({
       model: effectiveModel,
@@ -812,6 +816,13 @@ function formatToolConfigForLog(tool: string, sessionModel?: string, sessionId?:
       ? `effort=${e}`
       : "effort=(由 codex config.toml 决定)";
     return `model=${modelStr}, ${effortStr}`;
+  }
+  if (tool === "deveco") {
+    const m = config.deveco.model;
+    const a = config.deveco.agent;
+    const modelStr = m.trim() !== "" ? m : "(由 Deveco Code 配置决定)";
+    const agentStr = a.trim() !== "" ? `agent=${a}` : "agent=(默认)";
+    return `model=${modelStr}, ${agentStr}`;
   }
   return `model=${anthropicConfigDisplay(getModelForSession(sessionId))}, subagentModel=${anthropicConfigDisplay(CLAUDE_SUBAGENT_MODEL)}, effort=${anthropicConfigDisplay(CLAUDE_EFFORT)}`;
 }
@@ -1686,6 +1697,13 @@ async function resolveModelEffort(
     return {
       model: m.trim() !== "" ? m : UNKNOWN_MODEL_PLACEHOLDER,
       effort: e.trim() !== "" ? e : UNKNOWN_MODEL_PLACEHOLDER,
+    };
+  }
+  if (tool === "deveco") {
+    const m = config.deveco.model;
+    return {
+      model: m.trim() !== "" ? m : UNKNOWN_MODEL_PLACEHOLDER,
+      effort: null,
     };
   }
   return {
