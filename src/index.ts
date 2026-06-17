@@ -685,6 +685,11 @@ async function main(): Promise<void> {
     PROJECT_ROOT,
   });
 
+  process.title = "chatCCC-KyleMod";
+  console.log("==================================================================================\n")
+  console.log("This project is forked from ChatCCC 0.2.166, 合并上游 0.2.167–0.2.176 变更\n");
+  console.log("==================================================================================\n")
+
   // 黑匣子：所有未捕获异常 / 信号 / beforeExit 都同步写入 startup-trace.log（appendFileSync）。
   // 越早装越好——后续任何一行抛错都有兜底；它独立于 SIGINT 清理（见末尾的
   // server.close）——只负责诊断与默认致命退出，不替代清理逻辑。
