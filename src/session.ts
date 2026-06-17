@@ -83,6 +83,36 @@ async function sendFinalReplyTextOnce(
   return sent;
 }
 
+async function createVisibleProgressCard(
+  platform: PlatformAdapter,
+  chatId: string,
+  sessionId: string,
+  turnCount: number,
+  notifyFailureText?: string,
+): Promise<string | null> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let cardId: string | null = null;
+    try {
+      cardId = await platform.cardCreate(
+        buildProgressCard("", { showStop: true, headerTitle: "生成中..." }),
+      );
+      if (!cardId) throw new Error("empty card id");
+      await platform.cardSend(chatId, cardId);
+      await addCardToTurn(sessionId, turnCount, cardId);
+      return cardId;
+    } catch (err) {
+      console.error(
+        `[${ts()}] [DISPLAY] progress card send attempt ${attempt} failed: chatId=${chatId} cardId=${cardId || "(none)"} ${(err as Error).message}`,
+      );
+    }
+  }
+
+  if (notifyFailureText) {
+    await platform.sendText(chatId, notifyFailureText).catch(() => {});
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Shared state (imported by index.ts)
 // ---------------------------------------------------------------------------
@@ -1068,11 +1098,14 @@ export async function runAgentSession(
   if (displayChatIdForNew) {
     const ppNew = platformForChat(displayChatIdForNew);
     if (ppNew && ppNew.kind !== "wechat") {
-      const cardId = await ppNew.cardCreate(
-        buildProgressCard("", { showStop: true, headerTitle: "生成中..." }),
-      ).catch(() => null);
+      const cardId = await createVisibleProgressCard(
+        ppNew,
+        displayChatIdForNew,
+        sessionId,
+        nextTurnCount,
+        "生成中卡片发送失败，结果将以文本形式发送。",
+      );
       if (cardId) {
-        await ppNew.cardSend(displayChatIdForNew, cardId).catch(() => null);
         displayCards.set(displayChatIdForNew, {
           cardId,
           sequence: 1,
@@ -1084,7 +1117,6 @@ export async function runAgentSession(
           turnCount: nextTurnCount,
           dotCount: 0,
         });
-        addCardToTurn(sessionId, nextTurnCount, cardId).catch(() => {});
       }
     } else if (ppNew && ppNew.kind === "wechat") {
       // WeChat: 无卡片，但需要 display entry 追踪已发送内容
@@ -1262,7 +1294,10 @@ export async function runAgentSession(
         });
       }
       const active1 = getLastActiveChat(sessionId) ?? getChatsForSession(sessionId)[0];
-      if (active1) platform.setChatAvatar(active1, tool, "idle").catch(() => {});
+      if (active1) {
+        await platform.sendText(active1, "会话已停止。").catch(() => {});
+        platform.setChatAvatar(active1, tool, "idle").catch(() => {});
+      }
       console.log(`[${ts()}] Session ${sessionId} stopped (content chunks: ${state.chunkCount})`);
       if (tid) logTrace(tid, "SESSION_END", { sessionId, outcome: "stopped", chunks: state.chunkCount });
     } else if (wasAbnormalExit) {
@@ -1296,7 +1331,14 @@ export async function runAgentSession(
         });
       }
       const active2 = getLastActiveChat(sessionId) ?? getChatsForSession(sessionId)[0];
-      if (active2) platform.setChatAvatar(active2, tool, "idle").catch(() => {});
+      if (active2) {
+        const terminalState = await readStreamState(sessionId);
+        if (finalReply && !displayCards.has(active2) && (!terminalState || !isFinalReplySentForTurn(terminalState))) {
+          const pp = platformForChat(active2) ?? platform;
+          await sendFinalReplyTextOnce(pp, active2, sessionId, nextTurnCount, finalReply);
+        }
+        platform.setChatAvatar(active2, tool, "idle").catch(() => {});
+      }
       console.log(`[${ts()}] Session ${sessionId} stream complete (content chunks: ${state.chunkCount})`);
       if (tid) logTrace(tid, "SESSION_END", { sessionId, chunks: state.chunkCount, finalTextLen: finalReply.length });
     }
@@ -1315,17 +1357,21 @@ const CARD_ROTATE_MS = 9 * 60 * 1000;
 export function startUnifiedDisplayLoop(): void {
   if (unifiedDisplayLoopHandle !== null) return;
 
+  let tickRunning = false;
   const interval = setInterval(() => {
     void (async () => {
-      for (const [chatId, display] of displayCards) {
-        if (display.cardBusy) continue;
+      if (tickRunning) return;
+      tickRunning = true;
+      try {
+        for (const [chatId, display] of displayCards) {
+          if (display.cardBusy) continue;
 
-        const sessionId = display.sessionId;
-        const state = await readStreamState(sessionId);
-        if (!state) {
-          displayCards.delete(chatId);
-          continue;
-        }
+          const sessionId = display.sessionId;
+          const state = await readStreamState(sessionId);
+          if (!state) {
+            displayCards.delete(chatId);
+            continue;
+          }
 
         // 交叉验证：chat 当前绑定的 session 是否仍是 display 记录的 session。
         // 若 chat 已被切换到其他 session（如 /newh），旧 display 必须停推。
@@ -1390,45 +1436,57 @@ export function startUnifiedDisplayLoop(): void {
               ) {
                 continue;
               }
-              const nextSeq = display.sequence + 1;
-              const { title: headerTitle, template: headerTemplate } = formatTerminalHeader(state.status);
-              const cardContent = truncateContent(state.accumulatedContent + state.finalReply) || " ";
-              const doneCard = buildProgressCard(cardContent, { showStop: false, headerTitle, headerTemplate });
-              let terminalCardUpdateAccepted = false;
-              await p.cardUpdate(display.cardId, doneCard, nextSeq).then(() => {
-                display.sequence = nextSeq;
-                terminalCardUpdateAccepted = true;
-              }).catch(err => {
-                console.error(`[${ts()}] [DISPLAY] terminal cardUpdate failed: ${(err as Error).message}`);
-                if (isCardKitSequenceConflict(err)) {
+              const terminalCardAlreadyUpdated =
+                display.lastSentAccLen === state.accumulatedContent.length &&
+                display.lastSentFinalReply === state.finalReply;
+              let terminalCardUpdateAccepted = terminalCardAlreadyUpdated;
+              if (!terminalCardAlreadyUpdated) {
+                const nextSeq = display.sequence + 1;
+                const { title: headerTitle, template: headerTemplate } = formatTerminalHeader(state.status);
+                const cardContent = truncateContent(state.accumulatedContent + state.finalReply) || " ";
+                const doneCard = buildProgressCard(cardContent, { showStop: false, headerTitle, headerTemplate });
+                await p.cardUpdate(display.cardId, doneCard, nextSeq).then(() => {
                   display.sequence = nextSeq;
                   terminalCardUpdateAccepted = true;
+                }).catch(err => {
+                  console.error(`[${ts()}] [DISPLAY] terminal cardUpdate failed: ${(err as Error).message}`);
+                  if (isCardKitSequenceConflict(err)) {
+                    display.sequence = nextSeq;
+                    terminalCardUpdateAccepted = true;
+                  }
+                });
+                if (terminalCardUpdateAccepted) {
+                  display.lastSentAccLen = state.accumulatedContent.length;
+                  display.lastSentFinalReply = state.finalReply;
                 }
-              });
+              }
 
               // 若 session 仍在 activePrompts 中，说明 runAgentSession 的 finally
               // 还没执行，当前 stream state 可能是 stopSession fire-and-forget
               // 写入的，finalReply 滞后于内存态。卡片已更新为终态外观，但不发送
               // 文本、不删除 display 条目，留给 finally 落盘后的下一次 tick 处理。
               if (promptStillActive) {
-                if (terminalCardUpdateAccepted) {
-                  display.lastSentAccLen = state.accumulatedContent.length;
-                  display.lastSentFinalReply = state.finalReply;
+                continue;
+              }
+
+              let terminalTextDelivered = true;
+              if (state.finalReply) {
+                if (!isFinalReplySentForTurn(state)) {
+                  terminalTextDelivered = await sendFinalReplyTextOnce(p, chatId, sessionId, state.turnCount, state.finalReply);
                 }
+              } else if (state.accumulatedContent.trim()) {
+                const short = truncateContent(state.accumulatedContent, 30, 4000);
+                terminalTextDelivered = await p.sendText(chatId, `[生成过程]\n${short}`).then((ok) => ok !== false).catch(() => false);
+              }
+
+              if (!terminalTextDelivered) {
+                console.error(`[${ts()}] [DISPLAY] terminal text send failed, keep display for retry: chatId=${chatId} session=${sessionId} turn=${state.turnCount}`);
                 continue;
               }
 
               const finalSt = turnFinalStatus(state.status);
               finalizeTurnCards(sessionId, state.turnCount, finalSt).catch(() => {});
               displayCards.delete(chatId);
-              if (state.finalReply) {
-                if (!isFinalReplySentForTurn(state)) {
-                  await sendFinalReplyTextOnce(p, chatId, sessionId, state.turnCount, state.finalReply);
-                }
-              } else if (state.accumulatedContent.trim()) {
-                const short = truncateContent(state.accumulatedContent, 30, 4000);
-                await p.sendText(chatId, `[生成过程]\n${short}`).catch(() => {});
-              }
             }
             p.setChatAvatar(chatId, state.tool, "idle").catch(() => {});
             console.log(`[${ts()}] [DISPLAY] unified loop deleted display for ${chatId} (terminal: ${state.status})`);
@@ -1478,28 +1536,33 @@ export function startUnifiedDisplayLoop(): void {
               if (Date.now() - display.cardCreatedAt > CARD_ROTATE_MS) {
                 display.cardBusy = true;
                 try {
+                  const newCardId = await createVisibleProgressCard(
+                    p,
+                    chatId,
+                    sessionId,
+                    display.turnCount,
+                    display.streamErrorNotified ? undefined : "生成中卡片发送失败，结果将继续更新在上一张卡片中。",
+                  );
+                  if (!newCardId) {
+                    display.streamErrorNotified = true;
+                    continue;
+                  }
                   const oldSeqBase = display.sequence;
                   const oldContent = state.accumulatedContent + state.finalReply;
                   const oldCard = buildProgressCard(truncateContent(oldContent) || " ", { showStop: false, headerTitle: "生成中（上轮）" });
-                  await p.cardUpdate(display.cardId, oldCard, oldSeqBase + 1).catch(err => {
+                  await p.cardUpdate(display.cardId, oldCard, oldSeqBase + 1).then(() => {
+                    display.sequence = oldSeqBase + 1;
+                  }).catch(err => {
                     console.error(`[${ts()}] [DISPLAY] rotation old cardUpdate failed: ${(err as Error).message}`);
                   });
                   markCardDone(sessionId, display.turnCount, display.cardId).catch(() => {});
-                  const newCardId = await p.cardCreate(buildProgressCard(
-                    "",
-                    { showStop: true, headerTitle: "生成中..." },
-                  ));
-                  if (newCardId) {
-                    await p.cardSend(chatId, newCardId);
-                    addCardToTurn(sessionId, display.turnCount, newCardId).catch(() => {});
-                    display.cardId = newCardId;
-                    display.sequence = 1;
-                    display.cardCreatedAt = Date.now();
-                    display.rotationAccLen = state.accumulatedContent.length;
-                    display.rotationFinalReply = state.finalReply;
-                    display.lastSentContent = "";
-                    display.streamErrorNotified = false;
-                  }
+                  display.cardId = newCardId;
+                  display.sequence = 1;
+                  display.cardCreatedAt = Date.now();
+                  display.rotationAccLen = state.accumulatedContent.length;
+                  display.rotationFinalReply = state.finalReply;
+                  display.lastSentContent = "";
+                  display.streamErrorNotified = false;
                 } catch (err) {
                   console.error(`[${ts()}] [CARDIKT] rotation FAIL for ${chatId}: ${(err as Error).message}`);
                 } finally {
@@ -1576,9 +1639,12 @@ export function startUnifiedDisplayLoop(): void {
               }
             }
           }
-        } catch (err) {
-          console.error(`[${ts()}] Display loop error for ${chatId}: ${(err as Error).message}`);
+          } catch (err) {
+            console.error(`[${ts()}] Display loop error for ${chatId}: ${(err as Error).message}`);
+          }
         }
+      } finally {
+        tickRunning = false;
       }
     })().catch((err: unknown) => {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -1619,7 +1685,19 @@ export function stopSession(sessionId: string): boolean {
   prompt.stopped = true;
   clearPromptProcessMonitor(sessionId);
   cancelQueuedMessage(sessionId);
+  try {
+    prompt.closeSession?.();
+  } catch (err) {
+    console.warn(`[${ts()}] [STOP] closeSession failed for ${sessionId}: ${(err as Error).message}`);
+  }
   prompt.controller.abort();
+
+  // 强制杀死 CLI 子进程。controller.abort() 只在 for-await 收到下一条
+  // stream 消息时才被检测到——如果 agent 陷入无输出的计算循环，abort 信号
+  // 永远不会生效。直接 process.kill 让 stdout/stderr 管道关闭，stream 立即结束。
+  if (prompt.processPid !== undefined) {
+    try { process.kill(prompt.processPid); } catch { /* 进程可能已退出 */ }
+  }
   console.log(`[${ts()}] [STOP] Session ${sessionId} aborted`);
 
   // fire-and-forget：立刻把 stream-state.status 改成 stopped，

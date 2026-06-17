@@ -328,6 +328,7 @@ MiMo Code 的模型和 API 配置可在 `config.json` 的 `mimo` 字段中设置
 | `/state` | 查看当前会话状态 |
 | `/cd` | 查看或设置当前会话工作目录 |
 | `/sessions` | 查看所有会话状态 |
+| `/usage` | 查看 Codex 5h 用量和周用量 |
 | `/git <子命令>` | 在当前会话工作目录执行 `git ...` 并回传输出 |
 | `/plan <内容>` | 只读计划模式：仅允许读文件和 stop-stuck-loop 请求，不执行任何写操作 |
 | `/ask <内容>` | 只读问答模式：与 /plan 相同，仅允许读文件和 stop-stuck-loop 请求 |
