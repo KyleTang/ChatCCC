@@ -113,7 +113,7 @@ export function buildProgressCard(
       title: { tag: "plain_text", content: headerTitle },
     },
     body: {
-      direction: "vertical",
+      direction: "horizontal",
       elements,
     },
   });
