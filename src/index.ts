@@ -97,6 +97,7 @@ import {
   setSessionPlatform,
   startUnifiedDisplayLoop,
 } from "./session.ts";
+import { fixStaleStreamStates } from "./stream-state.ts";
 import {
   rebuildSessionChatsFromRegistry,
   setQueueConsumer,
