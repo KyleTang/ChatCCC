@@ -826,6 +826,53 @@ export async function setDefaultCwd(dir: string, chatId: string): Promise<void> 
   await writeFile(getDefaultCwdFile(chatId), dir, "utf-8");
 }
 
+/** MyWorkDesk 等外部编排锁定的群 cwd：禁止 /cd 切换 */
+export function getCwdLockFile(chatId: string): string {
+  return join(USER_DATA_DIR, "state", `working_dir_lock_${chatId}.json`);
+}
+
+export async function isCwdLocked(chatId: string): Promise<boolean> {
+  try {
+    const raw = await readFile(getCwdLockFile(chatId), "utf-8");
+    const data = JSON.parse(raw) as { locked?: boolean };
+    return Boolean(data?.locked);
+  } catch {
+    return false;
+  }
+}
+
+export async function setCwdLock(
+  chatId: string,
+  locked: boolean,
+  meta: { project_slug?: string; source?: string } = {},
+): Promise<void> {
+  const file = getCwdLockFile(chatId);
+  if (!locked) {
+    try {
+      const { unlink } = await import("node:fs/promises");
+      await unlink(file);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    JSON.stringify(
+      {
+        locked: true,
+        project_slug: meta.project_slug || null,
+        source: meta.source || null,
+        updated_at: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tiny helpers
 // ---------------------------------------------------------------------------

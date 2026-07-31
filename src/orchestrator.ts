@@ -26,6 +26,7 @@ import {
   getAllModelsForTool,
   getDefaultCwd,
   setDefaultCwd,
+  isCwdLocked,
   getRecentDirs,
   addRecentDir,
   resolveDefaultAgentTool,
@@ -79,9 +80,19 @@ import {
   cancelQueuedMessage,
 } from "./session-chat-binding.ts";
 import { getCodexUsageSummary, getTenantAccessToken, sendPostMessage } from "./feishu-platform.ts";
+import {
+  isMessageTooDelayed,
+  normalizeMessageCreateTimeMs,
+  STALE_MESSAGE_MAX_DELAY_MS,
+} from "./feishu-api.ts";
 export { type PlatformAdapter } from "./platform-adapter.ts";
 import type { PlatformAdapter } from "./platform-adapter.ts";
 import type { CodexUsageSummary } from "./feishu-api.ts";
+
+export type HandleCommandOptions = {
+  /** 来自缓存队列消费时跳过「延迟 30 秒丢弃」（入队时已校验过） */
+  fromQueue?: boolean;
+};
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -90,6 +101,96 @@ import type { CodexUsageSummary } from "./feishu-api.ts";
 export function cwdDisplayName(cwd: string): string {
   const trimmed = cwd.trim().replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).filter(Boolean).pop() || trimmed || "cwd";
+}
+
+/** Windows 下路径大小写/分隔符不一致时仍视为同一目录 */
+export function sameCwdPath(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false;
+  try {
+    return (
+      resolve(a).replace(/\\/g, "/").toLowerCase() ===
+      resolve(b).replace(/\\/g, "/").toLowerCase()
+    );
+  } catch {
+    return a === b;
+  }
+}
+
+/**
+ * MyWorkDesk 锁定群：确保当前 session 的 cwd 等于锁定目录。
+ * 不一致则重建 session 并写回 registry / 群描述。
+ */
+async function ensureLockedGroupSession(
+  platform: PlatformAdapter,
+  chatId: string,
+  preferred: { sessionId: string; tool: string } | null,
+  chatNameHint?: string,
+): Promise<{ sessionId: string; tool: string; cwd: string; rebound: boolean } | null> {
+  if (!(await isCwdLocked(chatId))) return null;
+  const lockedCwd = await getDefaultCwd(chatId);
+  const tool = preferred?.tool || resolveDefaultAgentTool();
+  let sessionId = preferred?.sessionId || "";
+
+  if (sessionId) {
+    try {
+      const adapter = getAdapterForTool(tool, sessionId);
+      const info = await adapter.getSessionInfo(sessionId);
+      if (info?.cwd && sameCwdPath(info.cwd, lockedCwd)) {
+        bindChatToSession(sessionId, chatId);
+        if (!sessionInfoMap.has(chatId)) {
+          sessionInfoMap.set(chatId, {
+            sessionId,
+            turnCount: 0,
+            lastContextTokens: 0,
+            startTime: Date.now(),
+            tool,
+          });
+        }
+        return { sessionId, tool, cwd: lockedCwd, rebound: false };
+      }
+    } catch {
+      /* fall through to recreate */
+    }
+  }
+
+  console.warn(
+    `[${ts()}] [cwd-lock] rebind chat=${chatId} → ${lockedCwd} (oldSession=${sessionId || "none"})`,
+  );
+  if (sessionId) unbindChatFromSession(sessionId, chatId);
+  sessionInfoMap.delete(chatId);
+
+  const init = await initClaudeSession(tool, lockedCwd, chatId);
+  sessionId = init.sessionId;
+  bindChatToSession(sessionId, chatId);
+  sessionInfoMap.set(chatId, {
+    sessionId,
+    turnCount: 0,
+    lastContextTokens: 0,
+    startTime: Date.now(),
+    tool,
+  });
+
+  const name = chatNameHint || newGroupChatName(lockedCwd);
+  const desc = `${sessionPrefixForTool(tool)} ${sessionId}`;
+  await recordSessionRegistry({
+    chatId,
+    sessionId,
+    tool,
+    chatName: name,
+    turnCount: 0,
+    startTime: Date.now(),
+    running: false,
+  });
+  await saveSessionTool(sessionId, tool, name);
+  try {
+    await platform.updateChatInfo(chatId, name, desc);
+  } catch (err) {
+    console.warn(
+      `[${ts()}] [cwd-lock] updateChatInfo failed chat=${chatId}: ${(err as Error).message}`,
+    );
+  }
+
+  return { sessionId, tool, cwd: lockedCwd, rebound: true };
 }
 
 /** 群创建时间戳，格式 YYMMDD-HHMM，如 2026-01-01 02:03 → 260101-0203 */
@@ -345,10 +446,30 @@ export async function handleCommand(
   msgTimestamp: number,
   chatType = "group",
   traceId?: string,
+  opts?: HandleCommandOptions,
 ): Promise<void> {
   const tid = traceId ?? makeTraceId();
   const textLower = text.toLowerCase();
   recordChatPlatform(chatId, platform);
+
+  // 延迟送达超过 30 秒：不处理、不入队（队列消费除外）
+  if (!opts?.fromQueue) {
+    const created = normalizeMessageCreateTimeMs(msgTimestamp);
+    if (isMessageTooDelayed(created)) {
+      const delayMs = Date.now() - created;
+      logTrace(tid, "DONE", {
+        outcome: "skip_stale_message",
+        delayMs,
+        thresholdMs: STALE_MESSAGE_MAX_DELAY_MS,
+        msgTimestamp: created,
+      });
+      console.log(
+        `[${ts()}] [SKIP] Stale message ignored (delay ${Math.round(delayMs / 1000)}s > ${STALE_MESSAGE_MAX_DELAY_MS / 1000}s), chat=${chatId}`,
+      );
+      return;
+    }
+  }
+
   await cleanupNonWechatP2pBinding(platform, chatId, chatType, tid);
 
   if (textLower === "/restart") {
@@ -430,6 +551,17 @@ export async function handleCommand(
       cmd: "/cd",
       arg: text.slice(3).trim() || "(none)",
     });
+    if (await isCwdLocked(chatId)) {
+      const lockedCwd = await getDefaultCwd(chatId);
+      await platform.sendCard(
+        chatId,
+        "工作目录已锁定",
+        `此群由 MyWorkDesk 绑定到项目目录，不能切换：\n\`${lockedCwd}\`\n\n可用 **/newh** 在本群重置会话（仍使用该目录）。`,
+        "orange",
+      );
+      logTrace(tid, "DONE", { outcome: "cd_locked", lockedCwd });
+      return;
+    }
     const currentDir = await getDefaultCwd(chatId);
 
     // 获取当前会话的实际工作路径（若在会话群内）
@@ -549,6 +681,17 @@ export async function handleCommand(
   }
 
   if (textLower === "/new" || textLower.startsWith("/new ")) {
+    if (await isCwdLocked(chatId)) {
+      const lockedCwd = await getDefaultCwd(chatId);
+      await platform.sendCard(
+        chatId,
+        "工作目录已锁定",
+        `此群已绑定项目目录，禁止 **/new** 另建会话群。\n\n锁定目录：\`${lockedCwd}\`\n请用 **/newh** 在本群重置会话。`,
+        "orange",
+      );
+      logTrace(tid, "DONE", { outcome: "new_locked", lockedCwd });
+      return;
+    }
     const toolArg = text.slice(5).trim().toLowerCase();
     const tool = toolArg || resolveDefaultAgentTool();
     logTrace(tid, "BRANCH", { cmd: "/new", tool });
@@ -752,7 +895,7 @@ export async function handleCommand(
     return;
   }
 
-  // 检测会话上下文：群聊从 description 获取，私聊从 session-registry 获取
+  // 检测会话上下文：群聊优先 description，锁定群同时参考 session-registry
   let sessionId: string | null = null;
   let descriptionTool: string | null = null;
   let toolLabel: string | null = null;
@@ -777,6 +920,45 @@ export async function handleCommand(
       console.log(
         `[${ts()}] [INFO] Cannot get chat info for ${chatId}: ${(err as Error).message}`,
       );
+    }
+
+    // 锁定群：registry 为权威来源（updateChatInfo 失败时 description 可能过期）
+    if (await isCwdLocked(chatId)) {
+      try {
+        const registry = await loadSessionRegistryForBinding();
+        const record = registry[chatId];
+        const preferred =
+          record?.sessionId && record?.tool
+            ? { sessionId: record.sessionId, tool: record.tool }
+            : sessionId && descriptionTool
+              ? { sessionId, tool: descriptionTool }
+              : null;
+        const ensured = await ensureLockedGroupSession(
+          platform,
+          chatId,
+          preferred,
+          chatInfo?.name || record?.chatName,
+        );
+        if (ensured) {
+          sessionId = ensured.sessionId;
+          descriptionTool = ensured.tool;
+          toolLabel = toolDisplayName(descriptionTool);
+          if (ensured.rebound) {
+            await platform
+              .sendCard(
+                chatId,
+                "工作目录已对齐",
+                `本群已锁定到项目目录，已重建会话：\n\`${ensured.cwd}\`\n\n不能使用 /cd 切换。可用 /newh 重置会话。`,
+                "blue",
+              )
+              .catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[${ts()}] [cwd-lock] ensure failed chat=${chatId}: ${(err as Error).message}`,
+        );
+      }
     }
   } else if (platform.kind === "wechat") {
     // 微信私聊：从 session-registry.json 获取绑定的 session。
@@ -1025,11 +1207,15 @@ export async function handleCommand(
       logTrace(tid, "BRANCH", { cmd: "/newh" });
       const adapter = getAdapterForTool(descriptionTool, sessionId);
       let cwd: string;
-      try {
-        const info = await adapter.getSessionInfo(sessionId);
-        cwd = info?.cwd ?? (await getDefaultCwd(chatId));
-      } catch {
+      if (await isCwdLocked(chatId)) {
         cwd = await getDefaultCwd(chatId);
+      } else {
+        try {
+          const info = await adapter.getSessionInfo(sessionId);
+          cwd = info?.cwd ?? (await getDefaultCwd(chatId));
+        } catch {
+          cwd = await getDefaultCwd(chatId);
+        }
       }
 
       // 第一步:创建新 session(此时尚未碰任何内存绑定,失败可直接返回,
@@ -1413,6 +1599,7 @@ export async function handleCommand(
     }
 
     // 并发检查：同一 session 只能有一个活跃 prompt，多余消息进入队列
+    // （到达此处时入站延迟已 < 30s；过期消息不会入队）
     if (isSessionRunning(sessionId)) {
       const queued = enqueueMessage(sessionId, {
         text, chatId, openId, msgTimestamp, chatType, traceId: tid,

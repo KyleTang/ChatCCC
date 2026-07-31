@@ -59,7 +59,6 @@ import {
   addReaction,
   createGroupChat,
   extractSessionInfo,
-  formatDelayNotice,
   getChatInfo,
   getTenantAccessToken,
   recallMessage,
@@ -78,7 +77,13 @@ import {
 } from "./feishu-platform.ts";
 import { SimulatedPlatform, SIM_DEFAULT_CHAT_ID } from "./sim-platform.ts";
 import { setMessageHandler } from "./sim-store.ts";
+import {
+  isMessageTooDelayed,
+  normalizeMessageCreateTimeMs,
+  STALE_MESSAGE_MAX_DELAY_MS,
+} from "./feishu-api.ts";
 import { handleAgentImageRequest } from "./agent-image-rpc.ts";
+import { handleAgentBindChatCwdRequest } from "./agent-bind-chat-cwd.ts";
 import { handleAgentFileRequest } from "./agent-file-rpc.ts";
 import { handleAgentStopStuckRequest } from "./agent-stop-stuck.ts";
 import { applyPrivacy } from "./privacy.ts";
@@ -172,7 +177,9 @@ setSessionPlatform(feishuPlatform);
 
 // 注册队列消费回调：session 生成完成后自动处理缓存消息
 setQueueConsumer((platform, msg) => {
-  handleCommand(platform, msg.text, msg.chatId, msg.openId, msg.msgTimestamp, msg.chatType, msg.traceId).catch(err =>
+  handleCommand(platform, msg.text, msg.chatId, msg.openId, msg.msgTimestamp, msg.chatType, msg.traceId, {
+    fromQueue: true,
+  }).catch(err =>
     console.error(`[${ts()}] Queue consume failed: ${(err as Error).message}`)
   );
 });
@@ -413,9 +420,25 @@ async function startBotServiceCore(): Promise<void> {
       const openId = sender?.sender_id?.open_id ?? "";
       const chatId = message.chat_id ?? "";
       const chatType = message.chat_type ?? "group";
+      const msgTimestamp = normalizeMessageCreateTimeMs(
+        parseInt(message.create_time ?? "0", 10) || Date.now(),
+      );
 
       console.log(`[MSG] sender=${openId} chat=${chatId} type=${chatType} text="${text}"`);
       appendChatLog(chatId, openId, text);
+
+      if (isMessageTooDelayed(msgTimestamp)) {
+        const delayMs = Date.now() - msgTimestamp;
+        logTrace(traceId, "DONE", {
+          outcome: "skip_stale_message",
+          delayMs,
+          thresholdMs: STALE_MESSAGE_MAX_DELAY_MS,
+        });
+        console.log(
+          `[${ts()}] [SKIP] Stale Feishu message ignored (delay ${Math.round(delayMs / 1000)}s > ${STALE_MESSAGE_MAX_DELAY_MS / 1000}s) id=${messageId ?? "-"}`,
+        );
+        return;
+      }
 
       if (chatType === "p2p" && openId) {
         notifyFeishuP2pOpenId(openId);
@@ -432,13 +455,7 @@ async function startBotServiceCore(): Promise<void> {
       }
 
       if (!text) return;
-      const msgTimestamp = parseInt(message.create_time ?? "0", 10) || Date.now();
       logTrace(traceId, "RECV", { chatId, chatType, text: text.slice(0, 100) });
-      const delayNotice = formatDelayNotice(msgTimestamp, text);
-      if (delayNotice) {
-        const delayToken = await getTenantAccessToken();
-        await sendCardReply(delayToken, chatId, "延迟送达", delayNotice, "yellow").catch(() => {});
-      }
       await handleCommand(feishuPlatform, text, chatId, openId, msgTimestamp, chatType, traceId);
       } catch (err) {
         logTrace(traceId, "ERROR", { message: (err as Error).message });
@@ -712,7 +729,12 @@ async function main(): Promise<void> {
     setExtraApiHandler(async (req, res) => {
       const injected = await handleSimInjectMessage(req, res);
       if (injected) return true;
-      return (await handleAgentImageRequest(req, res)) || (await handleAgentFileRequest(req, res)) || (await handleAgentStopStuckRequest(req, res));
+      return (
+        (await handleAgentImageRequest(req, res)) ||
+        (await handleAgentFileRequest(req, res)) ||
+        (await handleAgentStopStuckRequest(req, res)) ||
+        (await handleAgentBindChatCwdRequest(req, res))
+      );
     });
 
     const simServer = createServer(createUiRouter());
@@ -771,7 +793,12 @@ async function main(): Promise<void> {
     });
   });
   setExtraApiHandler(async (req, res) => {
-    return (await handleAgentImageRequest(req, res)) || (await handleAgentFileRequest(req, res)) || (await handleAgentStopStuckRequest(req, res));
+    return (
+      (await handleAgentImageRequest(req, res)) ||
+      (await handleAgentFileRequest(req, res)) ||
+      (await handleAgentStopStuckRequest(req, res)) ||
+      (await handleAgentBindChatCwdRequest(req, res))
+    );
   });
 
   console.log(`[启动 2/7] 环境与凭证检查`);

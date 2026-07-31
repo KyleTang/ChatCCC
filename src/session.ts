@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import {
   CLAUDE_API_KEY,
@@ -17,6 +17,7 @@ import {
   config,
   fileLog,
   getDefaultCwd,
+  isCwdLocked,
   isAnthropicConfigEmpty,
   toolDisplayName,
   ts,
@@ -956,7 +957,20 @@ export async function runAgentSession(
   try {
     adapter = getAdapterForTool(tool, sessionId);
     info = await adapter.getSessionInfo(sessionId);
-    cwd = info?.cwd ?? (await getDefaultCwd(_chatId));
+    if (await isCwdLocked(_chatId)) {
+      cwd = await getDefaultCwd(_chatId);
+      if (info?.cwd) {
+        const a = resolve(info.cwd).replace(/\\/g, "/").toLowerCase();
+        const b = resolve(cwd).replace(/\\/g, "/").toLowerCase();
+        if (a !== b) {
+          console.warn(
+            `[${ts()}] [cwd-lock] session cwd mismatch session=${sessionId} meta=${info.cwd} lock=${cwd}`,
+          );
+        }
+      }
+    } else {
+      cwd = info?.cwd ?? (await getDefaultCwd(_chatId));
+    }
     if (tid) logTrace(tid, "SESSION_START", { sessionId, tool, cwd, turn: (sessionInfoMap.get(_chatId)?.turnCount ?? 0) + 1 });
     console.log(
       `[${ts()}] Running ${adapter.displayName} session: ${sessionId} (${formatToolConfigForLog(tool, info?.model, sessionId)}, cwd=${cwd})`

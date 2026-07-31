@@ -949,15 +949,40 @@ export async function getOrDownloadImage(token: string, messageId: string, fileK
 // Messaging
 // ---------------------------------------------------------------------------
 
-const DELAY_NOTICE_THRESHOLD_MS = 15 * 60 * 1000; // 15 分钟
+const DELAY_NOTICE_THRESHOLD_MS = 15 * 60 * 1000; // 15 分钟（仅提示）
+/** 收到时已延迟超过该阈值：直接丢弃，不处理、不入缓存队列 */
+export const STALE_MESSAGE_MAX_DELAY_MS = 30 * 1000;
+
+/** 统一消息 create_time 为毫秒（兼容秒级时间戳） */
+export function normalizeMessageCreateTimeMs(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return Date.now();
+  // 小于 1e12 视为秒
+  if (raw < 1e12) return Math.round(raw * 1000);
+  return Math.round(raw);
+}
+
+/**
+ * 服务端收到时，相对消息创建时间是否已过期（默认 30 秒）。
+ * 用于避免断线重连/延迟推送导致重复干活。
+ */
+export function isMessageTooDelayed(
+  createTimeMs: number,
+  nowMs?: number,
+  maxDelayMs: number = STALE_MESSAGE_MAX_DELAY_MS,
+): boolean {
+  const created = normalizeMessageCreateTimeMs(createTimeMs);
+  const now = nowMs ?? Date.now();
+  return now - created > maxDelayMs;
+}
 
 /** 消息延迟超过阈值时生成提醒文本，否则返回 null */
 export function formatDelayNotice(createTimeMs: number, messageText?: string, nowMs?: number): string | null {
   const now = nowMs ?? Date.now();
-  const delayMs = now - createTimeMs;
+  const created = normalizeMessageCreateTimeMs(createTimeMs);
+  const delayMs = now - created;
   if (delayMs < DELAY_NOTICE_THRESHOLD_MS) return null;
 
-  const sendDate = new Date(createTimeMs);
+  const sendDate = new Date(created);
   const month = sendDate.getMonth() + 1;
   const day = sendDate.getDate();
   const hour = String(sendDate.getHours()).padStart(2, "0");
